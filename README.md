@@ -13,7 +13,8 @@ Talks to [Zakura](https://github.com/Moonrend/Zakura) as a messaging channel —
 
 - Left **agent sidebar** with **search**, unread filter, and status dots
 - Main **chat thread**: streaming bubbles, tool-activity chips, empty / error states
-- Rounded **composer** with drafts, interrupt, and keyboard avoidance
+- Rounded **composer** with per-agent drafts, automatic height, interrupt, and keyboard avoidance
+- Quoted reply previews, selectable tool details, and keyboard-scrollable card tables
 - **Settings**: Zakura base URL + auth token (on-device only; never commit secrets)
 - **`ZakuraChannelClient`**: mock (default) + **live WebSocket** client (needs server adapter)
 - Accessibility labels / live regions on primary controls
@@ -64,7 +65,12 @@ npm start   # then press w / i / a
 ```sh
 npm run typecheck
 npm test
+npm run export:web
+npx playwright install chromium  # first browser-test run
+npm run test:web
 ```
+
+Browser checks cover desktop/mobile layouts, IME input, draft focus, live transport events, and WCAG checks with axe. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
 
 
 ## CI / packaging
@@ -118,7 +124,7 @@ Open **Settings** (sidebar footer):
 | Auth token | Device / API token for the live channel |
 | Use mock channel | Keep **on** until platform `zakurabot` exists on the server |
 
-Settings persist locally (SecureStore / AsyncStorage). Do **not** put tokens in the repo or committed `.env` files.
+Settings persist locally in AsyncStorage (browser localStorage on web). Native SecureStore integration is not implemented. Do **not** put tokens in the repo or committed `.env` files.
 
 ## Project layout
 
@@ -141,6 +147,8 @@ tests/               Protocol / client / reducer unit tests
 | Demo transcript + mock streaming replies | **Real (local mock)** |
 | Settings persistence (URL / token) | **Real (local only)** |
 | `ZakuraChannelClient` + live WS client + decoder | **Real client; needs server** |
+| Attachment uploads / adding agents from the client | **Stubbed** (controls disabled) |
+| Received attachments and card images | **Browser links**; embedded media playback is not implemented |
 | End-to-end live channel to Zakura | **Stubbed** until `zakurabot` adapter |
 | Platform `zakurabot` in Moonrend/Zakura | **Not in this repo** (separate PR) |
 | Computer desktop viewer / voice / App Store | **Out of scope** |
@@ -148,6 +156,16 @@ tests/               Protocol / client / reducer unit tests
 ## How it binds to Zakura
 
 See **[docs/architecture.md](./docs/architecture.md)**. Summary: Zakura adds platform **`zakurabot`** and binds a **`RemoteChannelSessionHandle`** per turn; agents must use **`chat_reply`** for user-visible messages; this client maps those frames to bubbles and chips.
+
+The v1 client also enforces these boundaries in `lib/channel/protocol.ts` and `live-client.ts`:
+
+- `ready` and `agents` carry complete rosters. Events for removed agents are ignored; removal/offline status clears their pending sends and active streams. An ordinary roster refresh preserves ongoing local work until `typing: false`, an ending error, or disconnect.
+- A streaming `chat_reply` announces an id once per connection. Repeated announcements cannot erase tokens or reopen a finished reply. `message_done` finishes one reply; `typing: false` ends the turn, which may contain several replies. A non-streaming `chat_reply` is a complete snapshot and may include `interrupted: true` for stopped output.
+- User echoes must carry the original `clientMessageId`, even when the server assigns its own message id. Retry uses that same key. The server must deduplicate within the authenticated conversation, replay accepted echoes, and report the current turn state. The client never automatically resends on reconnect; an unconfirmed write is available for manual retry.
+- Send rejections include `agentId` and `clientMessageId`. Operational errors that leave a turn running, such as a refused interrupt, set `turnEnded: false`; uncorrelated agent errors otherwise end the turn. An old rejection after acknowledgement cannot fail an accepted message.
+- The adapter must resolve workspace attachments to HTTP(S) URLs and set `reply_to` to the actual quoted platform message id, including the `RemoteChannelSessionHandle.inboundMessageId` default. Quotes resolve only inside the current conversation; missing history shows “Reply to earlier message”.
+
+Reconnect requires a fresh authenticated `ready` and fresh reply snapshots before deltas resume. Persistent history, replay cursors and turn ids are not implemented. End-to-end testing against Zakura still needs the server adapter; the browser tests emulate the proposed adapter.
 
 ## License
 

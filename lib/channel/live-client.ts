@@ -8,7 +8,8 @@
  * separate integration task — see docs/architecture.md.
  */
 import { version } from "../../package.json";
-import { decodeServerFrame, PROTOCOL_VERSION } from "./protocol";
+import type { Agent } from "../types";
+import { decodeServerFrame, isChannelId, PROTOCOL_VERSION } from "./protocol";
 import {
   ChannelEmitter, MAX_MESSAGE_LENGTH, uid,
   type ChannelConnectionState, type ChannelListener,
@@ -64,6 +65,7 @@ export function validateLiveSettings(input: { baseUrl: string; token: string }):
 
 type Timer = ReturnType<typeof setTimeout>;
 const key = (agentId: string, messageId: string) => JSON.stringify([agentId, messageId]);
+type PendingWrite = { agentId: string; text: string; timer: Timer };
 
 export class LiveZakuraChannelClient implements ZakuraChannelClient {
   readonly label = "Live WS";
@@ -74,10 +76,14 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   private attempt = 0;
   private reconnectTimer: Timer | null = null;
   private handshakeTimer: Timer | null = null;
+  private closeTimer: Timer | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pongTimer: Timer | null = null;
-  private activeReplies = new Set<string>();
-  private acknowledgements = new Map<string, Timer>();
+  private roster = new Map<string, Agent["status"]>();
+  // Retain completed ids until disconnect so a repeated announcement cannot
+  // reopen a finished reply. A reconnect starts a fresh snapshot/stream scope.
+  private replies = new Map<string, { agentId: string; active: boolean }>();
+  private acknowledgements = new Map<string, PendingWrite>();
 
   constructor(private readonly opts: LiveClientOptions) {}
 
@@ -91,7 +97,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
 
   /** Idempotent; resolves after starting the connection, not authentication. */
   async connect(): Promise<void> {
-    if (this.socket || this.reconnectTimer) return;
+    if (this.socket || this.reconnectTimer || (this.state === "connecting" && !this.closedByUser)) return;
     const problem = validateLiveSettings({ baseUrl: this.opts.baseUrl, token: this.opts.token });
     if (problem) { this.setState("error", problem); return; }
     this.closedByUser = false;
@@ -104,6 +110,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     const Impl = this.opts.WebSocketImpl ?? globalThis.WebSocket;
     if (!Impl) { this.fail("WebSocket is not available in this runtime.", false); return; }
     this.setState("connecting", this.attempt ? `Retry ${this.attempt}` : undefined);
+    if (this.closedByUser || this.socket) return;
     let socket: WebSocket;
     try { socket = new Impl(zakuraSocketUrl(this.opts.baseUrl)); } catch {
       this.fail("Could not open the Zakura connection.", true);
@@ -130,7 +137,14 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       this.handleFrame(event.data);
     };
     socket.onerror = () => {
-      if (current()) this.fail("Could not reach Zakura. Check the URL and channel configuration.", true);
+      if (!current() || this.closeTimer) return;
+      // Browsers fire error before close. Keep the close handler long enough to
+      // receive an auth/policy code instead of turning it into an endless retry.
+      const detail = "Could not reach Zakura. Check the URL and channel configuration.";
+      this.setState("error", detail);
+      if (current()) this.closeTimer = setTimeout(() => {
+        if (current()) this.fail(detail, true);
+      }, 1000);
     };
     socket.onclose = (event) => {
       if (!current()) return;
@@ -150,7 +164,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   }
 
   private scheduleReconnect() {
-    if (this.closedByUser || this.reconnectTimer) return;
+    if (this.closedByUser || this.socket || this.reconnectTimer) return;
     const delay = Math.min(this.opts.maxBackoffMs ?? 20_000, 1000 * 2 ** Math.min(this.attempt, 5));
     this.attempt += 1;
     this.reconnectTimer = setTimeout(() => {
@@ -159,19 +173,20 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     }, delay);
   }
 
-  private startHeartbeat() {
+  private startHeartbeat(socket: WebSocket) {
     const interval = this.opts.heartbeatMs ?? 25_000;
-    if (interval <= 0) return;
+    if (interval <= 0 || this.heartbeatTimer || this.socket !== socket || this.state !== "connected") return;
     this.heartbeatTimer = setInterval(() => {
-      if (this.pongTimer) return;
+      if (this.socket !== socket || this.state !== "connected" || this.pongTimer) return;
       this.pongTimer = setTimeout(() => {
-        this.fail("Zakura stopped responding. Reconnecting…", true);
+        if (this.socket === socket) this.fail("Zakura stopped responding. Reconnecting…", true);
       }, this.opts.pongTimeoutMs ?? 10_000);
       if (!this.sendFrame({ type: "ping" })) this.fail("Connection lost. Reconnecting…", true);
     }, interval);
   }
 
   private handleFrame(raw: string) {
+    const socket = this.socket;
     let frame;
     try { frame = decodeServerFrame(raw); } catch (error) {
       this.emitter.emit({ type: "error", message: (error as Error).message });
@@ -179,9 +194,12 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     }
     if (!frame) return;
     if (frame.type === "error") {
-      if (frame.clientMessageId && frame.agentId) this.acknowledge(frame.agentId, frame.clientMessageId);
+      if (frame.fatal) { this.fail(frame.message, false); return; }
+      if (frame.agentId && (this.state !== "connected" || !this.roster.has(frame.agentId))) return;
+      // A delayed rejection must not fail a delivered message or a newer turn.
+      if (frame.clientMessageId && frame.agentId && !this.acknowledge(frame.agentId, frame.clientMessageId)) return;
+      if (frame.agentId && !frame.clientMessageId && frame.turnEnded !== false) this.endReplies(frame.agentId);
       this.emitter.emit(frame);
-      if (frame.fatal) this.fail(frame.message, false);
       return;
     }
     if (frame.type === "ready") {
@@ -193,22 +211,29 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
       this.handshakeTimer = null;
       this.attempt = 0;
-      this.emitter.emit({ type: "agents", agents: frame.agents });
+      this.updateRoster(frame.agents);
+      // Subscribers can disconnect or replace the client during either event.
+      if (this.socket !== socket || this.closedByUser) return;
       this.setState("connected", "zakurabot");
-      this.startHeartbeat();
+      if (socket) this.startHeartbeat(socket);
       return;
     }
     // Do not accept data before the authenticated roster arrives.
     if (this.state !== "connected") return;
+    const agentId = "message" in frame ? frame.message.agentId : "agentId" in frame ? frame.agentId : undefined;
+    if (agentId && !this.roster.has(agentId)) return;
     switch (frame.type) {
+      case "agents":
+        this.updateRoster(frame.agents);
+        break;
       case "pong":
         if (this.pongTimer) clearTimeout(this.pongTimer);
         this.pongTimer = null;
         break;
       case "chat_reply": {
         const messageKey = key(frame.message.agentId, frame.message.id);
-        if (frame.message.streaming) this.activeReplies.add(messageKey);
-        else this.activeReplies.delete(messageKey);
+        if (frame.message.streaming && (this.replies.has(messageKey) || this.roster.get(frame.message.agentId) === "offline")) return;
+        this.replies.set(messageKey, { agentId: frame.message.agentId, active: !!frame.message.streaming });
         this.emitter.emit({ type: "message", message: frame.message });
         break;
       }
@@ -216,8 +241,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       case "message_done": {
         const messageKey = key(frame.agentId, frame.messageId);
         // Deltas can only update a previously announced chat_reply bubble.
-        if (!this.activeReplies.has(messageKey)) return;
-        if (frame.type === "message_done") this.activeReplies.delete(messageKey);
+        const reply = this.replies.get(messageKey);
+        if (!reply?.active) return;
+        if (frame.type === "message_done") reply.active = false;
         this.emitter.emit(frame);
         break;
       }
@@ -227,16 +253,43 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
         }
         this.emitter.emit(frame);
         break;
+      case "typing":
+        if (frame.active && this.roster.get(frame.agentId) === "offline") return;
+        if (!frame.active) this.endReplies(frame.agentId);
+        this.emitter.emit(frame);
+        break;
       default:
+        if (this.roster.get(frame.agentId) === "offline" && frame.message.tool?.ok === undefined && !frame.message.tool?.interrupted) return;
         this.emitter.emit(frame);
     }
   }
 
-  private acknowledge(agentId: string, messageId: string) {
+  private updateRoster(agents: Agent[]) {
+    this.roster = new Map(agents.map((agent) => [agent.id, agent.status]));
+    for (const [messageKey, reply] of this.replies) {
+      if (!this.roster.has(reply.agentId)) this.replies.delete(messageKey);
+      else if (this.roster.get(reply.agentId) === "offline") reply.active = false;
+    }
+    for (const [messageKey, pending] of this.acknowledgements) {
+      if (!this.roster.has(pending.agentId) || this.roster.get(pending.agentId) === "offline") {
+        clearTimeout(pending.timer);
+        this.acknowledgements.delete(messageKey);
+      }
+    }
+    this.emitter.emit({ type: "agents", agents });
+  }
+
+  private endReplies(agentId: string) {
+    for (const reply of this.replies.values()) if (reply.agentId === agentId) reply.active = false;
+  }
+
+  private acknowledge(agentId: string, messageId: string): boolean {
     const messageKey = key(agentId, messageId);
-    const timer = this.acknowledgements.get(messageKey);
-    if (timer) clearTimeout(timer);
+    const pending = this.acknowledgements.get(messageKey);
+    if (!pending) return false;
+    clearTimeout(pending.timer);
     this.acknowledgements.delete(messageKey);
+    return true;
   }
 
   private sendFrame(frame: Record<string, unknown>): boolean {
@@ -248,10 +301,12 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.pongTimer) clearTimeout(this.pongTimer);
-    this.handshakeTimer = this.heartbeatTimer = this.pongTimer = null;
-    for (const timer of this.acknowledgements.values()) clearTimeout(timer);
+    if (this.closeTimer) clearTimeout(this.closeTimer);
+    this.handshakeTimer = this.heartbeatTimer = this.pongTimer = this.closeTimer = null;
+    for (const pending of this.acknowledgements.values()) clearTimeout(pending.timer);
     this.acknowledgements.clear();
-    this.activeReplies.clear();
+    this.replies.clear();
+    this.roster.clear();
     const socket = this.socket;
     this.socket = null;
     if (socket) {
@@ -270,16 +325,24 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
 
   async sendMessage(input: SendMessageInput): Promise<void> {
     if (this.state !== "connected") throw new Error("Not connected to Zakura.");
+    this.requireAvailableAgent(input.agentId);
     const text = input.text.trim();
     if (!text || text.length > MAX_MESSAGE_LENGTH) throw new Error(`Use 1–${MAX_MESSAGE_LENGTH} characters per message.`);
     const clientMessageId = input.clientMessageId ?? uid("user");
+    if (!isChannelId(clientMessageId)) throw new Error("Invalid message id.");
     const messageKey = key(input.agentId, clientMessageId);
-    this.acknowledge(input.agentId, clientMessageId);
-    this.acknowledgements.set(messageKey, setTimeout(() => {
+    const previous = this.acknowledgements.get(messageKey);
+    if (previous) {
+      if (previous.text !== text) throw new Error("A pending message id cannot be reused for different text.");
+      return;
+    }
+    const pending: PendingWrite = { agentId: input.agentId, text, timer: setTimeout(() => {
+      if (this.acknowledgements.get(messageKey) !== pending) return;
       this.acknowledgements.delete(messageKey);
       this.emitter.emit({ type: "error", agentId: input.agentId, clientMessageId,
         message: "Delivery was not confirmed. Retry this message to check or resend it." });
-    }, this.opts.acknowledgementTimeoutMs ?? 15_000));
+    }, this.opts.acknowledgementTimeoutMs ?? 15_000) };
+    this.acknowledgements.set(messageKey, pending);
     if (!this.sendFrame({ type: "send", agentId: input.agentId, clientMessageId, text })) {
       this.acknowledge(input.agentId, clientMessageId);
       this.fail("Connection lost. Reconnecting…", true);
@@ -288,8 +351,16 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   }
 
   async interrupt(agentId: string): Promise<void> {
-    if (this.state !== "connected" || !this.sendFrame({ type: "interrupt", agentId })) {
+    if (this.state !== "connected") throw new Error("Could not stop the reply. Check the channel connection.");
+    this.requireAvailableAgent(agentId);
+    if (!this.sendFrame({ type: "interrupt", agentId })) {
+      this.fail("Connection lost. Reconnecting…", true);
       throw new Error("Could not stop the reply. Check the channel connection.");
     }
+  }
+
+  private requireAvailableAgent(agentId: string) {
+    if (!isChannelId(agentId) || !this.roster.has(agentId)) throw new Error("This agent is no longer available in the channel.");
+    if (this.roster.get(agentId) === "offline") throw new Error("This agent is offline. Choose an available agent.");
   }
 }

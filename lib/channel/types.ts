@@ -21,7 +21,9 @@ export type ChannelEvent =
   | { type: "message_done"; agentId: string; messageId: string; interrupted?: boolean }
   | { type: "tool_activity"; agentId: string; message: ChatMessage }
   | { type: "typing"; agentId: string; active: boolean }
-  | { type: "error"; message: string; agentId?: string; clientMessageId?: string };
+  | { type: "error"; message: string; agentId?: string; clientMessageId?: string;
+      /** False for operational failures (e.g. interrupt denied) that leave the turn running. */
+      turnEnded?: boolean };
 
 export type ChannelListener = (event: ChannelEvent) => void;
 

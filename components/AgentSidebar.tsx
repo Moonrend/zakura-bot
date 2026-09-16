@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { Plus, Search, Settings, X, CheckCheck } from "lucide-react-native";
 import { useRouter } from "expo-router";
@@ -18,6 +18,7 @@ export function AgentSidebar() {
   const insets = useSafeAreaInsets();
   const compact = width < 768;
   const [query, setQuery] = useState("");
+  const searchRef = useRef<TextInput>(null);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const unreadCount = agents.filter((agent) => agent.unread).length;
   const visible = useMemo(() => {
@@ -58,11 +59,11 @@ export function AgentSidebar() {
       <View className="px-3 pb-2">
         <View className="min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-inset pl-3">
           <Search size={16} color="#b8b8b8" />
-          <TextInput value={query} onChangeText={setQuery} placeholder="Search agents" placeholderTextColor="#a3a3a3"
+          <TextInput ref={searchRef} value={query} onChangeText={setQuery} placeholder="Search agents" placeholderTextColor="#a3a3a3"
             accessibilityLabel="Search agents" className="min-w-0 flex-1 rounded-lg py-3 text-[14px] text-ink"
             autoCorrect={false} autoCapitalize="none" returnKeyType="search" />
           {query ? (
-            <Pressable onPress={() => setQuery("")} className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
+            <Pressable onPress={() => { setQuery(""); searchRef.current?.focus(); }} className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
               accessibilityRole="button" accessibilityLabel="Clear search">
               <X size={16} color="#b8b8b8" />
             </Pressable>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { Check, Save } from "lucide-react-native";
 import { useRouter } from "expo-router";
+import Head from "expo-router/head";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStore } from "@/lib/store";
 import { validateLiveSettings } from "@/lib/channel";
@@ -49,6 +50,7 @@ export default function SettingsScreen() {
   return (
     <ScrollView className="flex-1 bg-app" keyboardShouldPersistTaps="handled"
       contentContainerStyle={{ padding: 20, paddingBottom: Math.max(insets.bottom, 20), width: "100%", maxWidth: 680, alignSelf: "center" }}>
+      <Head><title>Settings · Zakura Bot</title></Head>
       <Text className="mb-2 text-[20px] font-semibold text-ink" accessibilityRole="header">Your connection</Text>
       <Text className="mb-6 text-[14px] leading-6 text-ink-secondary">
         {settingsReady ? `${transportLabel} channel · ${connection}` : "Loading saved settings…"}
@@ -79,7 +81,7 @@ export default function SettingsScreen() {
         <Text className="text-[13px] leading-5 text-danger">{error}</Text>
       </View> : null}
       <Pressable onPress={() => void onSave()} disabled={!settingsReady || saving}
-        accessibilityRole="button" accessibilityLabel="Save settings" accessibilityState={{ disabled: !settingsReady || saving, busy: saving }}
+        accessibilityRole="button" accessibilityLabel="Save settings" aria-busy={saving} accessibilityState={{ disabled: !settingsReady || saving, busy: saving }}
         className="min-h-11 flex-row items-center justify-center gap-2 rounded-xl bg-accent py-3.5 active:opacity-80">
         {saving ? <ActivityIndicator size="small" color="#070707" /> : saved ? <Check size={18} color="#070707" /> : <Save size={17} color="#070707" />}
         <Text className="text-[15px] font-semibold text-app">{saving ? "Saving…" : saved ? "Saved" : "Save settings"}</Text>

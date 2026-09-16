@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CLIENT_INFO, validateLiveSettings, zakuraSocketUrl } from "../lib/channel/live-client";
 import { decodeServerFrame } from "../lib/channel/protocol";
-import { liveHarness } from "./helpers";
+import { agents, liveHarness } from "./helpers";
 
 test("socket URLs preserve prefixes and reject credentials or unsupported protocols", () => {
   assert.equal(zakuraSocketUrl(" https://example.com/zakura/ "), "wss://example.com/zakura/api/zakurabot/ws");
@@ -166,5 +166,111 @@ test("offline sends and interrupts reject; synchronous write failures are recove
   await assert.rejects(client.sendMessage({ agentId: "a", text: "a".repeat(4001) }));
   sockets[0].throwOnSend = true;
   await assert.rejects(client.sendMessage({ agentId: "a", text: "hi" }));
+  assert.equal(client.getConnectionState(), "error");
+});
+
+test("protocol enums cannot be coerced from arrays, and unsafe object keys are rejected", () => {
+  const reply = { type: "chat_reply", agentId: "a", messageId: "r", createdAt: 1 };
+  for (const payload of [
+    { text: "Body", format: ["raw"] }, { text: "Body", kind: ["card"] },
+    { actions: [{ label: "Open", url: "https://example.com", style: ["primary"] }] },
+    { attachments: [{ url: "https://example.com/file", type: ["file"] }] },
+    { card: { title: "   " } },
+  ]) assert.throws(() => decodeServerFrame(JSON.stringify({ ...reply, payload })));
+  for (const name of ["toString", "valueOf", "hasOwnProperty", "__defineGetter__", "bad\nkey"]) {
+    assert.throws(() => decodeServerFrame(JSON.stringify({ type: "ready", protocol: 1, agents: [{ ...agents[0], id: name }] })));
+  }
+  assert.throws(() => decodeServerFrame(JSON.stringify({ type: "agents", agents: [{ ...agents[0], status: ["idle"] }] })));
+  assert.equal(decodeServerFrame(JSON.stringify({ ...reply,
+    payload: { card: { table: { headers: ["Task", "Status"], rows: [] } } } }))?.type, "chat_reply");
+  const stopped = decodeServerFrame(JSON.stringify({ ...reply, interrupted: true, payload: {} }));
+  assert.equal(stopped?.type, "chat_reply");
+  if (stopped?.type === "chat_reply") assert.equal(stopped.message.interrupted, true);
+  assert.throws(() => decodeServerFrame(JSON.stringify({ ...reply, streaming: true, interrupted: true, payload: {} })));
+});
+
+test("roster removal cancels pending writes and streams; unknown and offline agents cannot send", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  await client.sendMessage({ agentId: "a", text: "pending", clientMessageId: "local" });
+  socket.frame({ type: "chat_reply", agentId: "a", messageId: "r", createdAt: 1, streaming: true, payload: {} });
+  socket.frame({ type: "agents", agents: [agents[1]] });
+  const count = events.length;
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "r", delta: "late" });
+  socket.frame({ type: "typing", agentId: "a", active: true });
+  socket.frame({ type: "chat_reply", agentId: "unknown", messageId: "r", createdAt: 1, payload: { text: "hidden" } });
+  t.mock.timers.tick(100);
+  assert.equal(events.length, count);
+  await assert.rejects(client.sendMessage({ agentId: "a", text: "removed" }));
+  await assert.rejects(client.interrupt("a"));
+  socket.frame({ type: "agents", agents: [{ ...agents[0], status: "offline" }, agents[1]] });
+  await assert.rejects(client.sendMessage({ agentId: "a", text: "offline" }));
+  socket.frame({ type: "agents", agents });
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "r", delta: "still late" });
+  assert.equal(events.filter((event) => event.type === "message_delta").length, 0);
+});
+
+test("duplicate stream announcements and tokens after a turn ends cannot reopen a reply", async (t) => {
+  const { client, sockets, events } = liveHarness(); t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  const reply = { type: "chat_reply", agentId: "a", messageId: "r", createdAt: 1, streaming: true, payload: {} };
+  socket.frame(reply);
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "r", delta: "Hello" });
+  socket.frame(reply);
+  assert.equal(events.filter((event) => event.type === "message").length, 1);
+  socket.frame({ type: "typing", agentId: "a", active: false });
+  const count = events.length;
+  socket.frame(reply);
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "r", delta: "late" });
+  assert.equal(events.length, count);
+});
+
+test("pending idempotency keys cannot be rewritten and late rejections cannot fail accepted sends", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  const input = { agentId: "a", text: "original", clientMessageId: "local" };
+  await client.sendMessage(input);
+  await client.sendMessage(input);
+  assert.equal(socket.sent.filter((frame) => frame.type === "send").length, 1);
+  await assert.rejects(client.sendMessage({ ...input, text: "different" }));
+  socket.frame({ type: "message", message: { id: "server", clientMessageId: "local", agentId: "a",
+    role: "user", kind: "text", text: "original", createdAt: 1 } });
+  const count = events.length;
+  socket.frame({ type: "error", agentId: "a", clientMessageId: "local", message: "Old rejection" });
+  t.mock.timers.tick(100);
+  assert.equal(events.length, count);
+});
+
+test("an error event preserves the following authorization close code and does not retry", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness(); t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open();
+  socket.onerror?.();
+  socket.remoteClose(4401);
+  t.mock.timers.tick(60_000);
+  assert.equal(sockets.length, 1);
+  assert.match(JSON.stringify(events.at(-1)), /Authentication failed/);
+});
+
+test("disconnecting inside a ready listener cannot resurrect the connection or its heartbeat", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets } = liveHarness({ heartbeatMs: 20, pongTimeoutMs: 10 });
+  t.after(() => client.disconnect());
+  client.subscribe((event) => { if (event.type === "agents") client.disconnect(); });
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  assert.equal(client.getConnectionState(), "disconnected");
+  t.mock.timers.tick(60_000);
+  assert.equal(sockets.length, 1);
+});
+
+test("failed interrupt writes trigger reconnect instead of leaving a falsely connected client", async (t) => {
+  const { client, sockets } = liveHarness(); t.after(() => client.disconnect());
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  sockets[0].throwOnSend = true;
+  await assert.rejects(client.interrupt("a"));
   assert.equal(client.getConnectionState(), "error");
 });

@@ -161,7 +161,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       createdAt: previous?.createdAt ?? Date.now() } });
     try {
       await client.sendMessage({ agentId, text: trimmed, clientMessageId: messageId });
-      return clientRef.current === client;
+      return clientRef.current === client && client.getConnectionState() === "connected" &&
+        stateRef.current.messagesByAgent[agentId]?.some((message) => message.id === messageId && !message.failed) === true;
     } catch (error) {
       if (clientRef.current === client) dispatch({ type: "error", agentId, clientMessageId: messageId,
         message: error instanceof Error ? error.message : "Could not send the message." });
@@ -176,19 +177,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const agentId = stateRef.current.selectedId;
     const message = stateRef.current.messagesByAgent[agentId]?.find((item) => item.id === messageId);
     if (!message?.failed || message.role !== "user" || !message.text) return false;
+    const draft = stateRef.current.draftsByAgent[agentId] ?? "";
     const ok = await deliver(agentId, message.text, messageId);
-    if (ok) clearDraft(agentId, message.text);
+    if (ok && draft.trim() === message.text) clearDraft(agentId, draft);
     return ok;
   }, [deliver, clearDraft]);
 
   const interrupt = useCallback(async () => {
     const agentId = stateRef.current.selectedId;
+    const client = clientRef.current;
     try {
-      const client = clientRef.current;
       if (!client?.interrupt) throw new Error("This channel cannot stop a reply.");
       await client.interrupt(agentId);
     } catch (error) {
-      dispatch({ type: "error", agentId, message: error instanceof Error ? error.message : "Could not stop the reply." });
+      if (clientRef.current === client) dispatch({ type: "error", agentId, turnEnded: false,
+        message: error instanceof Error ? error.message : "Could not stop the reply." });
     }
   }, [dispatch]);
 

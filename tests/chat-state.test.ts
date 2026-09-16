@@ -132,3 +132,72 @@ test("roster removal prunes inaccessible conversations and errors stay scoped to
   state = chatReducer(state, { type: "message", message: reply("unknown", "b") });
   assert.equal(state, previous);
 });
+
+test("late acknowledgements clear delivery errors and echoes without a client id retain their bubble", () => {
+  let state = initial();
+  const user: ChatMessage = { id: "local", agentId: "a", role: "user", kind: "text", text: "Hello", createdAt: 1 };
+  state = chatReducer(state, { type: "optimistic", message: user });
+  state = chatReducer(state, { type: "error", agentId: "a", clientMessageId: "local", message: "Not confirmed" });
+  state = chatReducer(state, { type: "message", message: { ...user, id: "server", clientMessageId: "local" } });
+  assert.equal(state.errors.length, 0);
+  state = chatReducer(state, { type: "message", message: { ...user, id: "server" } });
+  assert.equal(state.messagesByAgent.a.length, 1);
+  assert.equal(state.messagesByAgent.a[0].id, "local");
+  assert.equal(state.messagesByAgent.a[0].serverId, "server");
+  assert.equal(state.messagesByAgent.a[0].clientMessageId, "local");
+});
+
+test("a message id collision cannot replace a user bubble with an assistant reply or tool", () => {
+  let state = initial();
+  state = chatReducer(state, { type: "message", message: { ...reply("shared"), role: "user" } });
+  const before = state;
+  state = chatReducer(state, { type: "message", message: reply("shared", "a", "Overwritten") });
+  assert.equal(state, before);
+  state = chatReducer(state, { type: "tool_activity", agentId: "a", message: {
+    ...reply("shared"), kind: "activity", tool: { name: "chat_reply" },
+  } });
+  assert.equal(state, before);
+});
+
+test("roster refresh preserves ongoing work and offline previews reflect failed delivery", () => {
+  let state = initial();
+  state = chatReducer(state, { type: "optimistic", message: { ...reply("user"), role: "user" } });
+  state = chatReducer(state, { type: "message", message: { ...reply("stream"), streaming: true } });
+  state = chatReducer(state, { type: "agents", agents });
+  assert.equal(state.typing.a, true);
+  assert.equal(state.agents[0].status, "busy");
+  state = chatReducer(state, { type: "agents", agents: [{ ...agents[0], status: "offline" }, agents[1]] });
+  assert.equal(state.typing.a, false);
+  assert.equal(state.messagesByAgent.a[0].failed, true);
+  assert.equal(state.messagesByAgent.a[1].interrupted, true);
+  let onlyUser = initial();
+  onlyUser = chatReducer(onlyUser, { type: "optimistic", message: { ...reply("user"), role: "user" } });
+  onlyUser = chatReducer(onlyUser, { type: "agents", agents: [{ ...agents[0], status: "offline" }] });
+  assert.equal(onlyUser.agents[0].preview, "Not sent · Hello");
+});
+
+test("selecting an agent while its thread is hidden does not consume unread replies", () => {
+  let state = initial();
+  state = chatReducer(state, { type: "view", visible: false });
+  state = chatReducer(state, { type: "message", message: reply("new", "b") });
+  state = chatReducer(state, { type: "select", agentId: "b" });
+  assert.equal(state.agents[1].unread, true);
+  state = chatReducer(state, { type: "view", visible: true });
+  assert.equal(state.agents[1].unread, false);
+});
+
+test("an older send timeout or a failed interrupt does not stop the current reply", () => {
+  let state = initial();
+  state = chatReducer(state, { type: "optimistic", message: { ...reply("old", "a", "First", 1), role: "user" } });
+  state = chatReducer(state, { type: "typing", agentId: "a", active: false });
+  state = chatReducer(state, { type: "optimistic", message: { ...reply("new", "a", "Second", 2), role: "user" } });
+  state = chatReducer(state, { type: "message", message: { ...reply("stream", "a", "Answer", 3), streaming: true } });
+  state = chatReducer(state, { type: "error", agentId: "a", clientMessageId: "old", message: "Old send not confirmed" });
+  assert.equal(state.typing.a, true);
+  assert.equal(state.messagesByAgent.a[0].failed, true);
+  assert.equal(state.messagesByAgent.a[2].streaming, true);
+  state = chatReducer(state, { type: "error", agentId: "a", message: "Interrupt denied", turnEnded: false });
+  assert.equal(state.typing.a, true);
+  state = chatReducer(state, { type: "message_delta", agentId: "a", messageId: "stream", delta: " continues" });
+  assert.equal(state.messagesByAgent.a[2].text, "Answer continues");
+});

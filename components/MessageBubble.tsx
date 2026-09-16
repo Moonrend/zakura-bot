@@ -8,13 +8,14 @@ import { ReplyContent } from "./ReplyContent";
 
 type Props = {
   message: ChatMessage;
+  replyTarget?: ChatMessage;
   onRetry?: (id: string) => void;
   retryDisabled?: boolean;
   grouped?: boolean;
   reducedMotion?: boolean;
 };
 
-export function MessageBubble({ message, onRetry, retryDisabled, grouped, reducedMotion }: Props) {
+export function MessageBubble({ message, replyTarget, onRetry, retryDisabled, grouped, reducedMotion }: Props) {
   if (message.kind === "activity" && message.tool) return <ActivityChip tool={message.tool} reducedMotion={reducedMotion} />;
   if (message.kind === "system") return <View className="my-2 items-center"><Text className="text-[12px] text-ink-secondary" selectable>{message.text}</Text></View>;
   const user = message.role === "user";
@@ -24,12 +25,12 @@ export function MessageBubble({ message, onRetry, retryDisabled, grouped, reduce
   return (
     <View testID={`message-${message.id}`} className={cn("w-full flex-row", user ? "justify-end" : "justify-start", grouped ? "mb-1" : "mb-4")}>
       <View className={cn("min-w-0 max-w-[90%]", user ? "items-end" : "items-start")}>
-        <View accessibilityLabel={label} accessibilityState={{ busy: !!message.streaming }} className={cn(
+        <View accessibilityLabel={label} aria-busy={!!message.streaming} accessibilityState={{ busy: !!message.streaming }} className={cn(
           "min-w-0 max-w-full rounded-2xl px-4 py-2.5",
           user ? "rounded-br-md bg-bubble-user" : "rounded-bl-md bg-card",
           message.failed && "border border-danger/60",
         )}>
-          <ReplyContent message={message} />
+          <ReplyContent message={message} replyTarget={replyTarget} />
         </View>
         {!grouped || message.streaming || message.interrupted || message.pending ? (
           <Text className="mt-1.5 px-1 text-[11px] text-ink-secondary">

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Pressable, Text, TextInput, View, Platform } from "react-native";
 import { ArrowUp, Plus, Square } from "lucide-react-native";
 import { useStore } from "@/lib/store";
@@ -20,6 +20,32 @@ export function Composer({ agentName, busy, agentOffline = false, bottomInset = 
   const inputRef = useRef<TextInput>(null);
   const offline = connection !== "connected" || agentOffline;
   const canSend = text.trim().length > 0 && !busy && !offline && !submitting;
+
+  const resizeWebInput = useCallback(() => {
+    if (Platform.OS !== "web") return;
+    const input = inputRef.current as unknown as HTMLTextAreaElement | null;
+    if (!input) return;
+    // scrollHeight is at least the current height. Reset before measuring so
+    // deletion, sending and narrower/wider layouts can shrink as well as grow.
+    input.style.height = "0px";
+    const nextHeight = Math.min(160, Math.max(44, input.scrollHeight));
+    input.style.height = `${nextHeight}px`;
+    setHeight(nextHeight);
+  }, []);
+  useLayoutEffect(resizeWebInput, [text, resizeWebInput]);
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof ResizeObserver === "undefined") return;
+    const input = inputRef.current as unknown as HTMLTextAreaElement | null;
+    if (!input) return;
+    let width = input.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (input.clientWidth === width) return;
+      width = input.clientWidth;
+      resizeWebInput();
+    });
+    observer.observe(input);
+    return () => observer.disconnect();
+  }, [resizeWebInput]);
 
   const submit = async () => {
     if (!canSend || sending.current) return;
@@ -57,7 +83,7 @@ export function Composer({ agentName, busy, agentOffline = false, bottomInset = 
           onChangeText={(value) => setDraft(selectedId, value)}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          onContentSizeChange={(event) => setHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))}
+          onContentSizeChange={Platform.OS === "web" ? undefined : (event) => setHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))}
           placeholder={busy ? `Reply to ${agentName}…` : `Message ${agentName}`}
           placeholderTextColor="#a3a3a3"
           accessibilityLabel={`Message ${agentName}`}
@@ -71,8 +97,14 @@ export function Composer({ agentName, busy, agentOffline = false, bottomInset = 
           onKeyPress={(event) => {
             if (Platform.OS !== "web") return;
             const nativeEvent = event.nativeEvent as { key?: string; shiftKey?: boolean; isComposing?: boolean; keyCode?: number };
+            if (nativeEvent.isComposing || nativeEvent.keyCode === 229) return;
+            if (nativeEvent.key === "Escape") {
+              event.preventDefault();
+              inputRef.current?.blur();
+              return;
+            }
             // Enter commits a CJK composition before it can submit a message.
-            if (nativeEvent.key === "Enter" && !nativeEvent.shiftKey && !nativeEvent.isComposing && nativeEvent.keyCode !== 229) {
+            if (nativeEvent.key === "Enter" && !nativeEvent.shiftKey) {
               event.preventDefault();
               void submit();
             }
@@ -88,7 +120,7 @@ export function Composer({ agentName, busy, agentOffline = false, bottomInset = 
         ) : (
           <Pressable onPress={() => void submit()} disabled={!canSend}
             className={cn("h-11 w-11 shrink-0 items-center justify-center rounded-full", canSend ? "bg-accent active:opacity-80" : "bg-raised-hover")}
-            accessibilityRole="button" accessibilityLabel="Send message" accessibilityState={{ disabled: !canSend, busy: submitting }}>
+            accessibilityRole="button" accessibilityLabel="Send message" aria-busy={submitting} accessibilityState={{ disabled: !canSend, busy: submitting }}>
             <ArrowUp size={20} color={canSend ? "#fcfcfc" : "#a3a3a3"} />
           </Pressable>
         )}

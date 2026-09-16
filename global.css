@@ -8,11 +8,11 @@
     background: #070707;
   }
   body { overflow: hidden; }
-  :is(button, a, [role="button"], input, textarea):focus-visible {
+  :is(button, a, [role="button"], [tabindex="0"], input, textarea):focus-visible {
     outline: 2px solid #7abaff;
     outline-offset: 2px;
   }
-  [data-testid="message-text"] { overflow-wrap: anywhere; }
+  [data-testid="message-text"], [data-testid="reply-content"] * { overflow-wrap: anywhere; }
   @media (prefers-reduced-motion: reduce) {
     * { scroll-behavior: auto !important; }
   }

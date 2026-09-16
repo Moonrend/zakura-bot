@@ -54,6 +54,15 @@ export function ChatPane() {
     if (pinnedRef.current !== next) { pinnedRef.current = next; setPinned(next); }
   }, []);
   const rows = useMemo(() => buildRows(messages), [messages]);
+  const replyTargets = useMemo(() => {
+    const targets = new Map<string, ChatMessage>();
+    for (const message of messages) {
+      targets.set(message.id, message);
+      if (message.serverId) targets.set(message.serverId, message);
+      if (message.clientMessageId) targets.set(message.clientMessageId, message);
+    }
+    return targets;
+  }, [messages]);
   const lastReply = [...messages].reverse().find((message) => message.role === "assistant" && message.kind === "text" && !message.streaming);
   const statusText = connection !== "connected" ? connection === "connecting" ? "Connecting…" : "Channel offline"
     : agent?.status === "offline" ? "Agent offline" : busy ? "Working…" : `${transportLabel} · ${agent?.title ?? "Connected"}`;
@@ -91,7 +100,8 @@ export function ChatPane() {
             accessibilityLabel={`Conversation with ${agent.name}`} onScroll={onScroll} scrollEventThrottle={32}
             onContentSizeChange={() => { if (pinnedRef.current) scrollToLatest(); }}
             onLayout={() => { if (pinnedRef.current) scrollToLatest(); }}
-            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
+            // On web, on-drag also dismisses focus for programmatic auto-scroll.
+            keyboardDismissMode={Platform.OS === "web" ? "none" : Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ paddingTop: 8, paddingBottom: 20, paddingHorizontal: compact ? 12 : 24,
               maxWidth: 900, width: "100%", alignSelf: "center", flexGrow: rows.length === 0 ? 1 : undefined }}>
             {rows.length === 0 ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"}
@@ -104,6 +114,7 @@ export function ChatPane() {
                 <View className="h-px flex-1 bg-hairline/70" />
               </View>
             ) : <MessageBubble key={row.message.id} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
+              replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
               retryDisabled={connection !== "connected" || busy || agent.status === "offline"} onRetry={(id) => void retryMessage(id)} />)}
             {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
               <TypingDots reducedMotion={reducedMotion} /><Text className="text-[12px] text-ink-secondary">{agent.name} is working…</Text>

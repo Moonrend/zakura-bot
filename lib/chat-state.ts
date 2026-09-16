@@ -51,9 +51,14 @@ export function previewFromMessages(messages: ChatMessage[]): string | undefined
 function putMessage(state: ChatState, incoming: ChatMessage): ChatState {
   if (!state.agents.some((agent) => agent.id === incoming.agentId)) return state;
   const list = state.messagesByAgent[incoming.agentId] ?? [];
-  const stableId = incoming.role === "user" ? incoming.clientMessageId ?? incoming.id : incoming.id;
-  const previous = list.find((message) => message.id === stableId);
+  const incomingId = incoming.role === "user" ? incoming.clientMessageId ?? incoming.id : incoming.id;
+  const previous = list.find((message) => message.id === incomingId) ??
+    list.find((message) => message.id === incoming.id || message.serverId === incoming.id);
+  // Message ids identify one role and content kind for the lifetime of a thread.
+  if (previous && (previous.role !== incoming.role || previous.kind !== incoming.kind)) return state;
+  const stableId = previous?.id ?? incomingId;
   const message: ChatMessage = { ...previous, ...incoming, id: stableId,
+    clientMessageId: incoming.clientMessageId ?? previous?.clientMessageId,
     serverId: incoming.id !== stableId ? incoming.id : previous?.serverId };
   const updated = (previous ? list.map((item) => item.id === stableId ? message : item) : [...list, message])
     .sort((a, b) => a.createdAt - b.createdAt);
@@ -65,6 +70,10 @@ function putMessage(state: ChatState, incoming: ChatMessage): ChatState {
   const preview = previewFromMessages(updated);
   return { ...state,
     messagesByAgent: { ...state.messagesByAgent, [message.agentId]: updated },
+    errors: message.role === "user" && !message.pending && !message.failed
+      ? state.errors.filter((error) => error.agentId !== message.agentId ||
+        ![message.id, message.clientMessageId, message.serverId].some((id) => id !== undefined && id === error.clientMessageId))
+      : state.errors,
     agents: state.agents.map((agent) => agent.id === message.agentId
       ? { ...agent, preview: preview ?? agent.preview, unread: agent.unread || unread } : agent),
   };
@@ -98,11 +107,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "select":
       if (!state.agents.some((agent) => agent.id === action.agentId)) return state;
       return { ...state, selectedId: action.agentId,
-        agents: state.agents.map((agent) => agent.id === action.agentId ? { ...agent, unread: false } : agent) };
+        agents: state.agents.map((agent) => state.viewingThread && agent.id === action.agentId ? { ...agent, unread: false } : agent) };
     case "view":
       return { ...state, viewingThread: action.visible,
         agents: state.agents.map((agent) => action.visible && agent.id === state.selectedId ? { ...agent, unread: false } : agent) };
     case "draft":
+      if (!state.agents.some((agent) => agent.id === action.agentId)) return state;
       return { ...state, draftsByAgent: { ...state.draftsByAgent, [action.agentId]: action.text } };
     case "dismiss_error":
       return { ...state, errors: state.errors.filter((error) => error !== action.error) };
@@ -116,20 +126,25 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "agents": {
       const ids = new Set(action.agents.map((agent) => agent.id));
       const selectedId = ids.has(state.selectedId) ? state.selectedId : action.agents[0]?.id ?? "";
+      const messagesByAgent = Object.fromEntries(action.agents.map((agent) => [agent.id,
+        agent.status === "offline" ? settle(state.messagesByAgent[agent.id] ?? [], true) : state.messagesByAgent[agent.id] ?? []]));
       const agents = action.agents.map((agent) => {
         const old = state.agents.find((item) => item.id === agent.id);
-        return { ...agent, preview: previewFromMessages(state.messagesByAgent[agent.id] ?? []) ?? agent.preview,
+        const localWork = state.connection === "connected" && (state.typing[agent.id] || messagesByAgent[agent.id].some(
+          (message) => message.pending || message.streaming || (message.tool && message.tool.ok === undefined && !message.tool.interrupted),
+        ));
+        return { ...agent, status: agent.status !== "offline" && localWork ? "busy" as const : agent.status,
+          preview: previewFromMessages(messagesByAgent[agent.id]) ?? agent.preview,
           unread: state.viewingThread && agent.id === selectedId ? false : old?.unread ?? agent.unread };
       });
-      return { ...state, agents, selectedId,
-        messagesByAgent: Object.fromEntries(agents.map((agent) => [agent.id,
-          agent.status === "offline" ? settle(state.messagesByAgent[agent.id] ?? [], true) : state.messagesByAgent[agent.id] ?? []])),
+      return { ...state, agents, selectedId, messagesByAgent,
         draftsByAgent: Object.fromEntries(Object.entries(state.draftsByAgent).filter(([id]) => ids.has(id))),
         typing: Object.fromEntries(agents.map((agent) => [agent.id, agent.status === "busy"])),
         errors: state.errors.filter((error) => !error.agentId || ids.has(error.agentId)),
       };
     }
     case "optimistic": {
+      if (!state.agents.some((agent) => agent.id === action.message.agentId)) return state;
       const next = putMessage(state, { ...action.message, pending: true, failed: false });
       return { ...next, typing: { ...next.typing, [action.message.agentId]: true },
         errors: next.errors.filter((error) => error.agentId !== action.message.agentId),
@@ -151,18 +166,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return putMessage(state, { ...message, streaming: false, interrupted: action.interrupted ?? false });
     }
     case "typing": {
-      if (!state.agents.some((agent) => agent.id === action.agentId)) return state;
+      const agent = state.agents.find((agent) => agent.id === action.agentId);
+      if (!agent || (action.active && agent.status === "offline")) return state;
       if (!action.active) return endTurn(state, action.agentId);
       return { ...state, typing: { ...state.typing, [action.agentId]: true },
         agents: state.agents.map((agent) => agent.id === action.agentId ? { ...agent, status: "busy" } : agent) };
     }
     case "error": {
       if (action.agentId && !state.agents.some((agent) => agent.id === action.agentId)) return state;
-      let next = action.agentId ? endTurn(state, action.agentId) : state;
+      let next = state;
       if (action.agentId && action.clientMessageId) {
-        const message = (next.messagesByAgent[action.agentId] ?? []).find((item) => item.id === action.clientMessageId);
-        if (message?.role === "user") next = putMessage(next, { ...message, pending: false, failed: true });
-      }
+        const messages = state.messagesByAgent[action.agentId] ?? [];
+        const message = messages.find((item) => item.id === action.clientMessageId || item.serverId === action.clientMessageId);
+        if (message?.role !== "user" || (!message.pending && !message.failed)) return state;
+        const latestUser = [...messages].reverse().find((item) => item.role === "user");
+        const activeOutput = messages.some((item) => item.streaming || (item.tool && item.tool.ok === undefined && !item.tool.interrupted));
+        if (action.turnEnded !== false && latestUser?.id === message.id && (!activeOutput || action.turnEnded === true)) {
+          next = endTurn(state, action.agentId);
+        }
+        next = putMessage(next, { ...message, pending: false, failed: true });
+      } else if (action.agentId && action.turnEnded !== false) next = endTurn(state, action.agentId);
       const error: ChannelError = { message: action.message, agentId: action.agentId, clientMessageId: action.clientMessageId };
       return { ...next, errors: [...next.errors.filter((item) => item.agentId !== action.agentId), error] };
     }

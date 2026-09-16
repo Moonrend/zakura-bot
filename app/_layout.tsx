@@ -1,5 +1,6 @@
 import "../global.css";
 import { Stack } from "expo-router";
+import Head from "expo-router/head";
 import { StatusBar } from "expo-status-bar";
 import { View } from "react-native";
 import { StoreProvider } from "@/lib/store";
@@ -7,6 +8,7 @@ import { StoreProvider } from "@/lib/store";
 export default function RootLayout() {
   return (
     <StoreProvider>
+      <Head><title>Zakura Bot</title></Head>
       <View className="flex-1 bg-app">
         <StatusBar style="light" />
         <Stack

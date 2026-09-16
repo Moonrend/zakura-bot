@@ -27,7 +27,7 @@ export function RichText({ text, streaming, raw = false }: { text: string; strea
           ))}
         </Text>
       ))}
-      {streaming ? <Text accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="text-accent-border">▍</Text> : null}
+      {streaming ? <Text aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="text-accent-border">▍</Text> : null}
     </View>
   );
 }

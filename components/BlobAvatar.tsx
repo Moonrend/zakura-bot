@@ -13,6 +13,7 @@ export function BlobAvatar({ color, name, size = 40 }: Props) {
   return (
     <View
       accessible={false}
+      aria-hidden
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       className={cn("items-center justify-center rounded-full")}
