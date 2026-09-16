@@ -18,12 +18,17 @@ jobs:
         uses: actions/checkout@v4
 
       # RN native builds for 4 ABIs fill the ~14GB runner disk ("No space left on device").
-      # Free space before installing toolchains so we do not delete Node/JDK caches.
+      # Free space before installing toolchains. Keep Android SDK root; prune unused bits.
       - name: Free disk space
         run: |
           set -euo pipefail
+          df -h
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift /usr/local/.ghcup || true
+          sudo rm -rf /usr/local/lib/android/sdk/emulator /usr/local/lib/android/sdk/system-images || true
           sudo rm -rf /usr/local/lib/android/sdk/ndk-bundle || true
+          # Drop older platforms/build-tools we will not use (Expo 57 needs API 36).
+          sudo rm -rf /usr/local/lib/android/sdk/platforms/android-{29,30,31,32,33,34} || true
+          sudo rm -rf /usr/local/lib/android/sdk/build-tools/3* || true
           sudo docker system prune -af || true
           df -h
 
@@ -56,8 +61,16 @@ jobs:
       - name: Limit native ABIs for CI
         run: |
           set -euo pipefail
-          echo "reactNativeArchitectures=arm64-v8a" >> android/gradle.properties
-          grep reactNativeArchitectures android/gradle.properties
+          PROP=android/gradle.properties
+          if grep -q '^reactNativeArchitectures=' "$PROP"; then
+            sed -i 's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a/' "$PROP"
+          else
+            printf '\nreactNativeArchitectures=arm64-v8a\n' >> "$PROP"
+          fi
+          grep '^reactNativeArchitectures=' "$PROP"
+          which node
+          node -v
+          df -h
 
       - name: Assemble APK
         working-directory: android
@@ -66,34 +79,29 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a
         run: |
           set -euo pipefail
+          GRADLE_ARGS=(assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon --stacktrace)
           if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
             echo "Release signing secrets present — assembling release APK."
             mkdir -p keystores
             echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystores/release.keystore
-            # Wire signing into gradle.properties for this run
             {
               echo "MYAPP_UPLOAD_STORE_FILE=../keystores/release.keystore"
               echo "MYAPP_UPLOAD_KEY_ALIAS=${ANDROID_KEY_ALIAS}"
               echo "MYAPP_UPLOAD_STORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
               echo "MYAPP_UPLOAD_KEY_PASSWORD=${ANDROID_KEY_PASSWORD}"
             } >> gradle.properties
-            # Patch signingConfigs if the Expo template uses the common MYAPP_* props
             if grep -q 'MYAPP_UPLOAD_STORE_FILE' app/build.gradle 2>/dev/null || \
                grep -q 'signingConfigs' app/build.gradle 2>/dev/null; then
-              ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon
+              GRADLE_ARGS=(assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --stacktrace)
             else
               echo "::warning::Release keystore provided but app/build.gradle may not reference MYAPP_* props yet. Falling back to assembleDebug (debug-signed)."
-              echo "Document: add signingConfigs.release reading MYAPP_UPLOAD_* from gradle.properties for store-ready APKs."
-              ./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon
             fi
           else
             echo "No ANDROID_KEYSTORE_* secrets — building debug-signed APK (OK for internal testing)."
-            echo "Later: add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD for release signing."
-            ./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon
           fi
+          ./gradlew "${GRADLE_ARGS[@]}"
 
       - name: Locate APK
         id: apk
