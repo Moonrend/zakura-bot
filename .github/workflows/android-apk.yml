@@ -17,6 +17,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # RN native builds for 4 ABIs fill the ~14GB runner disk ("No space left on device").
+      # Free space before installing toolchains so we do not delete Node/JDK caches.
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift /usr/local/.ghcup || true
+          sudo rm -rf /usr/local/lib/android/sdk/ndk-bundle || true
+          sudo docker system prune -af || true
+          df -h
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -42,6 +52,13 @@ jobs:
       - name: Expo prebuild (Android)
         run: npx expo prebuild --platform android --non-interactive
 
+      # Device APK only — skip x86/armeabi-v7a native compiles (disk + time on GHA).
+      - name: Limit native ABIs for CI
+        run: |
+          set -euo pipefail
+          echo "reactNativeArchitectures=arm64-v8a" >> android/gradle.properties
+          grep reactNativeArchitectures android/gradle.properties
+
       - name: Assemble APK
         working-directory: android
         env:
@@ -49,6 +66,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a
         run: |
           set -euo pipefail
           if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
@@ -65,16 +83,16 @@ jobs:
             # Patch signingConfigs if the Expo template uses the common MYAPP_* props
             if grep -q 'MYAPP_UPLOAD_STORE_FILE' app/build.gradle 2>/dev/null || \
                grep -q 'signingConfigs' app/build.gradle 2>/dev/null; then
-              ./gradlew assembleRelease --no-daemon
+              ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon
             else
               echo "::warning::Release keystore provided but app/build.gradle may not reference MYAPP_* props yet. Falling back to assembleDebug (debug-signed)."
               echo "Document: add signingConfigs.release reading MYAPP_UPLOAD_* from gradle.properties for store-ready APKs."
-              ./gradlew assembleDebug --no-daemon
+              ./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon
             fi
           else
             echo "No ANDROID_KEYSTORE_* secrets — building debug-signed APK (OK for internal testing)."
             echo "Later: add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD for release signing."
-            ./gradlew assembleDebug --no-daemon
+            ./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon
           fi
 
       - name: Locate APK
