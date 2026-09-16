@@ -1,0 +1,93 @@
+name: Android APK
+
+# Local Gradle APK — no Expo cloud / EXPO_TOKEN required.
+# Prefer manual + version tags to save Actions minutes.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Expo prebuild (Android)
+        run: npx expo prebuild --platform android --non-interactive
+
+      - name: Assemble APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "Release signing secrets present — assembling release APK."
+            mkdir -p keystores
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystores/release.keystore
+            # Wire signing into gradle.properties for this run
+            {
+              echo "MYAPP_UPLOAD_STORE_FILE=../keystores/release.keystore"
+              echo "MYAPP_UPLOAD_KEY_ALIAS=${ANDROID_KEY_ALIAS}"
+              echo "MYAPP_UPLOAD_STORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
+              echo "MYAPP_UPLOAD_KEY_PASSWORD=${ANDROID_KEY_PASSWORD}"
+            } >> gradle.properties
+            # Patch signingConfigs if the Expo template uses the common MYAPP_* props
+            if grep -q 'MYAPP_UPLOAD_STORE_FILE' app/build.gradle 2>/dev/null || \
+               grep -q 'signingConfigs' app/build.gradle 2>/dev/null; then
+              ./gradlew assembleRelease --no-daemon
+            else
+              echo "::warning::Release keystore provided but app/build.gradle may not reference MYAPP_* props yet. Falling back to assembleDebug (debug-signed)."
+              echo "Document: add signingConfigs.release reading MYAPP_UPLOAD_* from gradle.properties for store-ready APKs."
+              ./gradlew assembleDebug --no-daemon
+            fi
+          else
+            echo "No ANDROID_KEYSTORE_* secrets — building debug-signed APK (OK for internal testing)."
+            echo "Later: add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD for release signing."
+            ./gradlew assembleDebug --no-daemon
+          fi
+
+      - name: Locate APK
+        id: apk
+        run: |
+          set -euo pipefail
+          APK=$(find android -name "*.apk" -type f | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "::error::No APK found under android/"
+            find android -type f -name "*.apk" -o -name "*.aab" || true
+            exit 1
+          fi
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "Found APK: $APK"
+          ls -lh "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zakura-bot-android-apk
+          path: ${{ steps.apk.outputs.path }}
+          retention-days: 14

@@ -67,17 +67,46 @@ npm test
 ```
 
 
-## CI / 打包
+## CI / packaging
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on **push** and **pull_request** to `main`:
+### Web CI (not a mobile app)
+
+`.github/workflows/ci.yml` runs on **push** / **pull_request** to `main`:
 
 | Job | Steps | Notes |
 | --- | --- | --- |
 | `build` | `npm ci` → `typecheck` → `test` → `export:web` | Required gate; Node 22 |
 | | Upload `dist/` as artifact **`zakura-bot-web`** | Retention ~14 days |
-| `web-e2e` | Download artifact → Playwright Chromium → `npm run test:web` | Soft gate (`continue-on-error`); uses `preview:web` via Playwright `webServer` |
+| `web-e2e` | Download artifact → Playwright Chromium → `npm run test:web` | Soft gate (`continue-on-error`) |
 
-Download the static web build from the Actions run → Artifacts → `zakura-bot-web`.
+This only produces a **static web** bundle. It is **not** an Android APK / iOS IPA.
+
+### App packaging (real mobile builds)
+
+| Workflow | What it produces | Trigger | Cloud / secrets |
+| --- | --- | --- | --- |
+| **`EAS Build`** (`.github/workflows/eas-build.yml`) | Expo cloud builds: Android APK (preview) / store AAB+IPA (production) | `workflow_dispatch` (platform + profile) **or** push tag `v*` | Requires **`EXPO_TOKEN`** |
+| **`Android APK`** (`.github/workflows/android-apk.yml`) | Local Gradle APK artifact **`zakura-bot-android-apk`** | `workflow_dispatch` **or** push tag `v*` | **No** Expo cloud; optional keystore secrets for release signing |
+
+**Trigger EAS (cloud):**
+
+1. Repo → **Settings → Secrets and variables → Actions** → add `EXPO_TOKEN` ([Expo access token](https://expo.dev/settings/access-tokens)).
+2. Link the project once locally: `npx eas-cli login` → `npx eas-cli init` (writes `extra.eas.projectId` into `app.json` if missing).
+3. Actions → **EAS Build** → Run workflow → choose `android` / `ios` / `all` and `preview` / `production`.
+4. Or: `git tag v0.1.0 && git push origin v0.1.0` (defaults to `all` + `preview`).
+5. Locally: `npm run eas:build:android` (preview APK), `npm run eas:build:ios`, `npm run eas:build:production`.
+
+Profiles in `eas.json`:
+
+- **`preview`**: internal distribution; Android **APK**; iOS **simulator** build.
+- **`production`**: store builds (Android App Bundle + iOS).
+
+**Trigger Android APK (no Expo cloud):**
+
+1. Actions → **Android APK** → Run workflow (or push a `v*` tag).
+2. Download artifact **`zakura-bot-android-apk`**.
+3. Without keystore secrets the job builds a **debug-signed** APK (fine for internal sideload).
+4. For release signing later, add: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, and wire `signingConfigs.release` in `android/app/build.gradle` to the `MYAPP_UPLOAD_*` gradle properties the workflow writes.
 
 ## Configuration
 
@@ -149,12 +178,17 @@ npm run typecheck && npm test
 
 ### CI / 打包
 
-`.github/workflows/ci.yml` 在 `main` 的 push / PR 上跑：
+**Web CI ≠ App 打包。** `ci.yml` 只导出静态 Web；真机安装包走下面两条工作流。
 
-- **`build`**（硬门禁）：Node 22、`npm ci`、`typecheck`、`test`、`export:web`，并上传 `dist/` 工件 **`zakura-bot-web`**（约 14 天）。
-- **`web-e2e`**（软门禁，`continue-on-error`）：下载工件后装 Playwright Chromium，跑 `npm run test:web`（内部会起 `preview:web`）。
+| 工作流 | 产物 | 触发 | 密钥 |
+| --- | --- | --- | --- |
+| **Web CI** `ci.yml` | 静态站点工件 `zakura-bot-web` | `main` push / PR | 无 |
+| **EAS Build** `eas-build.yml` | Expo 云构建（preview APK / production 商店包） | 手动 `workflow_dispatch` 或推送 `v*` tag | 必填 **`EXPO_TOKEN`** |
+| **Android APK** `android-apk.yml` | 本地 Gradle APK 工件 `zakura-bot-android-apk` | 手动或 `v*` tag | 无需 Expo；发版签名可后续加 keystore secrets |
 
-在 Actions 运行页的 Artifacts 中下载静态 Web 包。
+**跑 EAS：** 在仓库 Secrets 添加 `EXPO_TOKEN` → Actions → **EAS Build** → 选 platform / profile；或本地 `npm run eas:build:android`。首次需 `eas init` 写入 projectId。
+
+**跑本地 APK：** Actions → **Android APK** → Run；无 keystore 时产出 **debug 签名** APK（内测可装）。发版后再配 `ANDROID_KEYSTORE_BASE64` 等。
 
 ### 现状
 

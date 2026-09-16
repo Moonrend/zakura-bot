@@ -45,7 +45,12 @@
     "test": "tsx --test tests/*.test.ts",
     "export:web": "expo export --platform web",
     "preview:web": "node scripts/serve-web.mjs",
-    "test:web": "playwright test"
+    "test:web": "playwright test",
+    "eas:build:android": "eas build -p android --profile preview",
+    "eas:build:ios": "eas build -p ios --profile preview",
+    "eas:build:all": "eas build -p all --profile preview",
+    "eas:build:production": "eas build -p all --profile production",
+    "prebuild:android": "expo prebuild --platform android --non-interactive"
   },
   "private": true,
   "description": "Zakura Bot — Expo chat client for the Zakura platform (Grok Bot–inspired UI)"
