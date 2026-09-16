@@ -66,6 +66,19 @@ npm run typecheck
 npm test
 ```
 
+
+## CI / 打包
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on **push** and **pull_request** to `main`:
+
+| Job | Steps | Notes |
+| --- | --- | --- |
+| `build` | `npm ci` → `typecheck` → `test` → `export:web` | Required gate; Node 22 |
+| | Upload `dist/` as artifact **`zakura-bot-web`** | Retention ~14 days |
+| `web-e2e` | Download artifact → Playwright Chromium → `npm run test:web` | Soft gate (`continue-on-error`); uses `preview:web` via Playwright `webServer` |
+
+Download the static web build from the Actions run → Artifacts → `zakura-bot-web`.
+
 ## Configuration
 
 Open **Settings** (sidebar footer):
@@ -132,6 +145,16 @@ npm run typecheck && npm test
 ### 设置
 
 侧边栏底部 **Settings**：填写 Zakura **Base URL** 与 **Auth Token**（仅本地存储，勿提交密钥）。在服务端 `zakurabot` 适配就绪前请保持 **Use mock channel** 开启。
+
+
+### CI / 打包
+
+`.github/workflows/ci.yml` 在 `main` 的 push / PR 上跑：
+
+- **`build`**（硬门禁）：Node 22、`npm ci`、`typecheck`、`test`、`export:web`，并上传 `dist/` 工件 **`zakura-bot-web`**（约 14 天）。
+- **`web-e2e`**（软门禁，`continue-on-error`）：下载工件后装 Playwright Chromium，跑 `npm run test:web`（内部会起 `preview:web`）。
+
+在 Actions 运行页的 Artifacts 中下载静态 Web 包。
 
 ### 现状
 
