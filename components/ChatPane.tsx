@@ -1,280 +1,174 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  Text,
-  View,
-  useWindowDimensions,
-} from "react-native";
-import { ArrowDown, Menu } from "lucide-react-native";
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
+import { ArrowDown, Menu, MessageCircle, Settings } from "lucide-react-native";
+import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
 import { MessageBubble } from "./MessageBubble";
 import { Composer } from "./Composer";
 import { StatusBanner } from "./StatusBanner";
-import { formatDay, formatTime, useStore } from "@/lib/store";
+import { formatDay, useStore } from "@/lib/store";
+import { useReducedMotion } from "@/lib/use-reduced-motion";
 import type { ChatMessage } from "@/lib/types";
 
 const SUGGESTIONS = ["Say hello", "How do settings work?", "Run a slow reply", "help"];
 
 export function ChatPane() {
-  const {
-    agents,
-    selectedId,
-    messagesByAgent,
-    typing,
-    sidebarOpen,
-    setSidebarOpen,
-    retryMessage,
-    send,
-    connection,
-    transportLabel,
-  } = useStore();
-  const agent = agents.find((a) => a.id === selectedId) ?? agents[0];
-  const messages = messagesByAgent[agent?.id ?? ""] ?? [];
-  const busy = !!typing[agent?.id ?? ""];
+  const { agents, selectedId, messagesByAgent, typing, setSidebarOpen, retryMessage, send, connection, transportLabel } = useStore();
+  const agent = agents.find((item) => item.id === selectedId);
+  const messages = messagesByAgent[selectedId] ?? [];
+  const busy = !!typing[selectedId];
   const scrollRef = useRef<ScrollView>(null);
+  const scrollFrame = useRef<number | null>(null);
   const { width } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
   const compact = width < 768;
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const reducedMotion = useReducedMotion();
   const [pinned, setPinned] = useState(true);
+  const pinnedRef = useRef(true);
+  const lastScrollY = useRef(0);
 
-  // Keep the newest message visible while the user is pinned to the bottom.
-  const lastText = messages.length ? messages[messages.length - 1].text : undefined;
-  useEffect(() => {
-    if (!pinned) return;
-    const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 30);
-    return () => clearTimeout(t);
-  }, [messages.length, lastText, busy, pinned]);
+  const scrollToLatest = useCallback((animated = false) => {
+    if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      if (pinnedRef.current) scrollRef.current?.scrollToEnd({ animated: animated && !reducedMotion });
+    });
+  }, [reducedMotion]);
 
-  // Switching threads always jumps to the bottom.
   useEffect(() => {
+    pinnedRef.current = true;
+    lastScrollY.current = 0;
     setPinned(true);
-    const t = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 0);
-    return () => clearTimeout(t);
-  }, [selectedId]);
+    scrollToLatest();
+  }, [selectedId, scrollToLatest]);
+  useEffect(() => () => { if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current); }, []);
 
-  const onScroll = useCallback(
-    (e: { nativeEvent: { contentOffset: { y: number }; contentSize: { height: number }; layoutMeasurement: { height: number } } }) => {
-      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-      const distance = contentSize.height - layoutMeasurement.height - contentOffset.y;
-      setPinned(distance < 80);
-    },
-    [],
-  );
-
+  const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distance = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    // Growing content must not be mistaken for the user scrolling upwards.
+    const next = distance < 80 ? true : contentOffset.y < lastScrollY.current - 1 ? false : pinnedRef.current;
+    lastScrollY.current = contentOffset.y;
+    if (pinnedRef.current !== next) { pinnedRef.current = next; setPinned(next); }
+  }, []);
   const rows = useMemo(() => buildRows(messages), [messages]);
-
-  if (!agent) {
-    return (
-      <View className="flex-1 items-center justify-center bg-app">
-        <Text className="text-ink-secondary">No agent selected</Text>
-      </View>
-    );
-  }
-
-  const statusText =
-    agent.status === "offline"
-      ? "Offline"
-      : busy
-        ? "Working…"
-        : connection === "connected"
-          ? `${transportLabel} · ${agent.title ?? "Agent"}`
-          : agent.title ?? "Agent";
+  const lastReply = [...messages].reverse().find((message) => message.role === "assistant" && message.kind === "text" && !message.streaming);
+  const statusText = connection !== "connected" ? connection === "connecting" ? "Connecting…" : "Channel offline"
+    : agent?.status === "offline" ? "Agent offline" : busy ? "Working…" : `${transportLabel} · ${agent?.title ?? "Connected"}`;
 
   return (
-    <KeyboardAvoidingView
-      className="flex-1 bg-app"
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={0}
-    >
-      <View
-        className="flex-row items-center justify-between border-b border-hairline/60 px-4 pb-2.5"
-        style={{ paddingTop: Math.max(insets.top, 12) }}
-      >
-        <View className="min-w-0 flex-1 flex-row items-center gap-2.5">
-          {compact && !sidebarOpen ? (
-            <Pressable
-              onPress={() => setSidebarOpen(true)}
-              className="-ml-1 mr-0.5 rounded-md p-1.5 active:bg-raised"
-              accessibilityRole="button"
-              accessibilityLabel="Open agent list"
-            >
-              <Menu size={20} color="#fcfcfc" />
-            </Pressable>
-          ) : null}
-          <BlobAvatar color={agent.color} name={agent.name} size={30} />
-          <View className="min-w-0 flex-1">
-            <Text className="text-[15px] font-semibold text-ink" numberOfLines={1}>
-              {agent.name}
-            </Text>
-            <View className="flex-row items-center gap-1.5">
-              {busy ? <ActivityIndicator size={10} color="#fcfcfc99" /> : null}
-              <Text className="text-[11px] text-ink-secondary" numberOfLines={1}>
-                {statusText}
-              </Text>
-            </View>
-          </View>
+    <KeyboardAvoidingView className="min-w-0 flex-1 bg-app" behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}>
+      <View className="flex-row items-center gap-2.5 border-b border-hairline/60 px-4 pb-3"
+        style={{ paddingTop: Math.max(insets.top, 12) }}>
+        {compact ? <Pressable onPress={() => setSidebarOpen(true)} className="-ml-2 h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
+          accessibilityRole="button" accessibilityLabel="Open agent list"><Menu size={21} color="#fcfcfc" /></Pressable> : null}
+        {agent ? <BlobAvatar color={agent.color} name={agent.name} size={34} /> : <MessageCircle size={28} color="#459ffe" />}
+        <View className="min-w-0 flex-1">
+          <Text className="text-[15px] font-semibold text-ink" numberOfLines={1} accessibilityRole="header">{agent?.name ?? "Zakura Bot"}</Text>
+          <Text className="mt-1 text-[11px] text-ink-secondary" numberOfLines={1}>{statusText}</Text>
         </View>
       </View>
 
-      <View className="flex-1">
-        <ScrollView
-          ref={scrollRef}
-          className="flex-1"
-          onScroll={onScroll}
-          scrollEventThrottle={64}
-          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{
-            paddingTop: 12,
-            paddingBottom: 16,
-            paddingHorizontal: 16,
-            maxWidth: 900,
-            width: "100%",
-            alignSelf: "center",
-          }}
-        >
-          <StatusBanner />
-          {rows.length === 0 ? (
-            <EmptyThread
-              name={agent.name}
-              color={agent.color}
-              offline={agent.status === "offline"}
-              onSuggest={(s) => void send(s)}
-            />
-          ) : null}
-          {rows.map((row) =>
-            row.kind === "day" ? (
+      <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner /></View>
+      {!agent ? (
+        <View className="flex-1 items-center justify-center px-8 pb-12">
+          <MessageCircle size={40} color="#b3b3b3" />
+          <Text className="mt-5 text-center text-[20px] font-semibold text-ink">{connection === "connecting" ? "Connecting your agents…" : "No agents available"}</Text>
+          <Text className="mt-3 max-w-sm text-center text-[14px] leading-6 text-ink-secondary">
+            {connection === "connected" ? "Your channel has no agents yet. Check the agents assigned to your account."
+              : "Open Settings to connect your channel, or try the demo with the mock channel."}
+          </Text>
+          <Pressable onPress={() => router.push("/settings")} accessibilityRole="button" accessibilityLabel="Open connection settings"
+            className="mt-6 min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-raised px-4 py-3 active:bg-raised-hover">
+            <Settings size={16} color="#fcfcfc" /><Text className="text-[14px] text-ink">Connection settings</Text>
+          </Pressable>
+        </View>
+      ) : <>
+        <View className="min-h-0 min-w-0 flex-1">
+          <ScrollView key={selectedId} ref={scrollRef} testID="chat-transcript" className="min-w-0 flex-1"
+            accessibilityLabel={`Conversation with ${agent.name}`} onScroll={onScroll} scrollEventThrottle={32}
+            onContentSizeChange={() => { if (pinnedRef.current) scrollToLatest(); }}
+            onLayout={() => { if (pinnedRef.current) scrollToLatest(); }}
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingTop: 8, paddingBottom: 20, paddingHorizontal: compact ? 12 : 24,
+              maxWidth: 900, width: "100%", alignSelf: "center", flexGrow: rows.length === 0 ? 1 : undefined }}>
+            {rows.length === 0 ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"}
+              disabled={connection !== "connected" || agent.status === "offline" || busy}
+              onSuggest={(text) => void send(text, agent.id)} /> : null}
+            {rows.map((row) => row.kind === "day" ? (
               <View key={row.key} className="my-3 flex-row items-center gap-3">
                 <View className="h-px flex-1 bg-hairline/70" />
-                <Text className="text-[11px] text-ink-secondary">
-                  {row.label} · {row.time}
-                </Text>
+                <Text className="text-[11px] text-ink-secondary">{row.label}</Text>
                 <View className="h-px flex-1 bg-hairline/70" />
               </View>
-            ) : (
-              <MessageBubble
-                key={row.message.id}
-                message={row.message}
-                grouped={row.grouped}
-                onRetry={(id) => void retryMessage(id)}
-              />
-            ),
-          )}
-          {busy && !messages.some((m) => m.streaming) ? (
-            <View
-              className="mb-2 flex-row items-center gap-2 pl-1"
-              accessibilityLiveRegion="polite"
-              accessibilityLabel={`${agent.name} is working`}
-            >
-              <TypingDots />
-              <Text className="text-[12px] text-ink-secondary">{agent.name} is working…</Text>
-            </View>
-          ) : null}
-        </ScrollView>
-
-        {!pinned ? (
-          <Pressable
-            onPress={() => {
-              setPinned(true);
-              scrollRef.current?.scrollToEnd({ animated: true });
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Jump to latest"
-            className="absolute bottom-3 right-4 h-9 w-9 items-center justify-center rounded-full border border-hairline bg-raised active:bg-raised-hover"
-          >
-            <ArrowDown size={16} color="#fcfcfc" />
-          </Pressable>
-        ) : null}
-      </View>
-
-      <Composer agentName={agent.name} busy={busy} bottomInset={insets.bottom} />
+            ) : <MessageBubble key={row.message.id} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
+              retryDisabled={connection !== "connected" || busy || agent.status === "offline"} onRetry={(id) => void retryMessage(id)} />)}
+            {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
+              <TypingDots reducedMotion={reducedMotion} /><Text className="text-[12px] text-ink-secondary">{agent.name} is working…</Text>
+            </View> : null}
+          </ScrollView>
+          {!pinned ? <Pressable onPress={() => { pinnedRef.current = true; setPinned(true); scrollToLatest(true); }}
+            accessibilityRole="button" accessibilityLabel="Jump to latest"
+            className="absolute bottom-3 right-4 h-11 w-11 items-center justify-center rounded-full border border-hairline bg-raised active:bg-raised-hover">
+            <ArrowDown size={19} color="#fcfcfc" />
+          </Pressable> : null}
+        </View>
+        <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
+          {busy ? `${agent.name} is replying.` : lastReply ? `${agent.name}${lastReply.interrupted ? " stopped" : " replied"}: ${lastReply.text ?? lastReply.card?.title ?? "Attachment"}` : "Ready for your message."}
+        </Text>
+        <Composer key={selectedId} agentName={agent.name} busy={busy} agentOffline={agent.status === "offline"} bottomInset={insets.bottom} />
+      </>}
     </KeyboardAvoidingView>
   );
 }
 
-type Row =
-  | { kind: "day"; key: string; label: string; time: string }
-  | { kind: "msg"; message: ChatMessage; grouped: boolean };
-
-/** Insert day separators and mark consecutive same-author bubbles as grouped. */
+type Row = { kind: "day"; key: string; label: string } | { kind: "msg"; message: ChatMessage; grouped: boolean };
 function buildRows(messages: ChatMessage[]): Row[] {
   const rows: Row[] = [];
   let lastDay = "";
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
-    const day = formatDay(m.createdAt);
-    if (day !== lastDay) {
-      rows.push({ kind: "day", key: `day_${m.id}`, label: day, time: formatTime(m.createdAt) });
-      lastDay = day;
-    }
-    const next = messages[i + 1];
-    const grouped =
-      !!next &&
-      next.kind === "text" &&
-      m.kind === "text" &&
-      next.role === m.role &&
-      next.createdAt - m.createdAt < 60_000;
-    rows.push({ kind: "msg", message: m, grouped });
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    const day = new Date(message.createdAt).toDateString();
+    if (day !== lastDay) { rows.push({ kind: "day", key: `day_${message.id}`, label: formatDay(message.createdAt) }); lastDay = day; }
+    const next = messages[index + 1];
+    const grouped = !!next && next.kind === "text" && message.kind === "text" && next.role === message.role &&
+      new Date(next.createdAt).toDateString() === day && next.createdAt - message.createdAt < 60_000;
+    rows.push({ kind: "msg", message, grouped });
   }
   return rows;
 }
 
-function EmptyThread({
-  name,
-  color,
-  offline,
-  onSuggest,
-}: {
-  name: string;
-  color: string;
-  offline: boolean;
-  onSuggest: (text: string) => void;
+function EmptyThread({ name, color, offline, disabled, onSuggest }: {
+  name: string; color: string; offline: boolean; disabled: boolean; onSuggest: (text: string) => void;
 }) {
   return (
-    <View className="items-center px-4 py-14">
+    <View className="flex-1 items-center justify-center px-4 py-12">
       <BlobAvatar color={color} name={name} size={64} />
-      <Text className="mt-4 text-[17px] font-semibold text-ink">{name}</Text>
-      <Text className="mt-1 text-center text-[13px] text-ink-secondary">
-        {offline
-          ? "This agent is offline. Messages you send will be queued when the zakurabot channel is live."
-          : "Send a message to start the thread."}
+      <Text className="mt-5 text-[20px] font-semibold text-ink">{offline ? `${name} is offline` : `Say hello to ${name}`}</Text>
+      <Text className="mt-2 max-w-sm text-center text-[14px] leading-6 text-ink-secondary">
+        {offline ? "You can write a draft here. Sending becomes available when this agent is online." : "A new conversation starts with a message."}
       </Text>
-      <View className="mt-6 flex-row flex-wrap justify-center gap-2">
-        {SUGGESTIONS.map((s) => (
-          <Pressable
-            key={s}
-            onPress={() => onSuggest(s)}
-            accessibilityRole="button"
-            className="rounded-full border border-hairline bg-panel px-3.5 py-2 active:bg-raised"
-          >
-            <Text className="text-[13px] text-ink">{s}</Text>
-          </Pressable>
-        ))}
-      </View>
+      {!offline ? <View className="mt-6 flex-row flex-wrap justify-center gap-2">
+        {SUGGESTIONS.map((suggestion) => <Pressable key={suggestion} onPress={() => onSuggest(suggestion)} disabled={disabled}
+          accessibilityRole="button" accessibilityState={{ disabled }}
+          className="min-h-11 justify-center rounded-full border border-hairline bg-panel px-4 py-3 active:bg-raised">
+          <Text className="text-[13px] text-ink">{suggestion}</Text>
+        </Pressable>)}
+      </View> : null}
     </View>
   );
 }
 
-function TypingDots() {
+function TypingDots({ reducedMotion }: { reducedMotion: boolean }) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => (t + 1) % 3), 350);
-    return () => clearInterval(id);
-  }, []);
-  return (
-    <View className="flex-row items-center gap-1">
-      {[0, 1, 2].map((i) => (
-        <View
-          key={i}
-          className="h-1.5 w-1.5 rounded-full bg-ink"
-          style={{ opacity: tick === i ? 0.9 : 0.3 }}
-        />
-      ))}
-    </View>
-  );
+    if (reducedMotion) return;
+    const timer = setInterval(() => setTick((value) => (value + 1) % 3), 350);
+    return () => clearInterval(timer);
+  }, [reducedMotion]);
+  return <View className="flex-row items-center gap-1" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+    {[0, 1, 2].map((index) => <View key={index} className="h-1.5 w-1.5 rounded-full bg-ink" style={{ opacity: reducedMotion || tick === index ? 0.75 : 0.3 }} />)}
+  </View>;
 }

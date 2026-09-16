@@ -1,182 +1,135 @@
 import { useMemo, useState } from "react";
 import { Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
-import { Plus, Search, Settings, X } from "lucide-react-native";
+import { Plus, Search, Settings, X, CheckCheck } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
 import { formatTime, useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 
-const DOT: Record<string, string> = {
-  connected: "bg-success",
-  connecting: "bg-warning",
-  error: "bg-danger",
-  disconnected: "bg-ink-secondary",
-};
+const CONNECTION_DOT = { connected: "bg-success", connecting: "bg-warning", error: "bg-danger", disconnected: "bg-ink-secondary" };
+const STATUS_DOT = { idle: "bg-success", busy: "bg-warning", offline: "bg-ink-secondary" };
+const STATUS_LABEL = { idle: "Available", busy: "Working", offline: "Offline" };
 
 export function AgentSidebar() {
-  const {
-    agents,
-    selectedId,
-    selectAgent,
-    messagesByAgent,
-    connection,
-    transportLabel,
-    setSidebarOpen,
-  } = useStore();
+  const { agents, selectedId, selectAgent, messagesByAgent, draftsByAgent, connection, transportLabel, setSidebarOpen } = useStore();
   const router = useRouter();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const compact = width < 768;
   const [query, setQuery] = useState("");
-
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const unreadCount = agents.filter((agent) => agent.unread).length;
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return agents;
-    return agents.filter(
-      (a) =>
-        a.name.toLowerCase().includes(q) ||
-        (a.title ?? "").toLowerCase().includes(q) ||
-        (a.preview ?? "").toLowerCase().includes(q),
-    );
-  }, [agents, query]);
+    const value = query.trim().toLocaleLowerCase();
+    return agents.filter((agent) => (!unreadOnly || agent.unread) && (!value ||
+      [agent.name, agent.title, agent.preview].some((text) => text?.toLocaleLowerCase().includes(value))));
+  }, [agents, query, unreadOnly]);
+  const connectionLabel = connection === "connected" ? `${transportLabel} channel · connected`
+    : connection === "connecting" ? "Connecting…" : connection === "error" ? "Channel error" : "Disconnected";
 
-  const connectionLabel =
-    connection === "connected"
-      ? `${transportLabel} channel · connected`
-      : connection === "connecting"
-        ? "Connecting…"
-        : connection === "error"
-          ? "Channel error"
-          : "Disconnected";
+  const openSettings = () => {
+    setSidebarOpen(false);
+    router.push("/settings");
+  };
 
   return (
-    <View
-      className="h-full w-full border-r border-hairline bg-panel"
-      style={{ paddingTop: Math.max(insets.top, 12) }}
-    >
-      <View className="flex-row items-center justify-between px-4 pb-1">
+    <View className="h-full w-full border-r border-hairline bg-panel" style={{ paddingTop: Math.max(insets.top, 12) }}>
+      <View className="flex-row items-center justify-between px-4 pb-2">
         <View className="min-w-0 flex-1">
-          <Text className="text-[17px] font-semibold text-ink">Zakura Bot</Text>
-          <View className="flex-row items-center gap-1.5">
-            <View className={cn("h-1.5 w-1.5 rounded-full", DOT[connection] ?? DOT.disconnected)} />
-            <Text className="text-[11px] text-ink-secondary" numberOfLines={1}>
-              {connectionLabel}
-            </Text>
+          <Text className="text-[17px] font-semibold text-ink" accessibilityRole="header">Zakura Bot</Text>
+          <View className="mt-1 flex-row items-center gap-1.5">
+            <View className={cn("h-1.5 w-1.5 rounded-full", CONNECTION_DOT[connection])} />
+            <Text className="text-[11px] text-ink-secondary" numberOfLines={1}>{connectionLabel}</Text>
           </View>
         </View>
-        <View className="flex-row items-center">
-          <Pressable
-            className="rounded-md p-1.5 active:bg-raised"
-            accessibilityRole="button"
-            accessibilityLabel="New agent (coming soon)"
-            accessibilityState={{ disabled: true }}
-          >
-            <Plus size={20} color="#fcfcfc66" />
+        <Pressable disabled className="h-11 w-11 items-center justify-center rounded-xl opacity-40"
+          accessibilityRole="button" accessibilityLabel="Adding agents is not available yet" accessibilityState={{ disabled: true }}>
+          <Plus size={20} color="#b8b8b8" />
+        </Pressable>
+        {compact ? (
+          <Pressable onPress={() => setSidebarOpen(false)} className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
+            accessibilityRole="button" accessibilityLabel="Close agent list">
+            <X size={20} color="#b8b8b8" />
           </Pressable>
-          {compact ? (
-            <Pressable
-              onPress={() => setSidebarOpen(false)}
-              className="rounded-md p-1.5 active:bg-raised"
-              accessibilityRole="button"
-              accessibilityLabel="Close agent list"
-            >
-              <X size={20} color="#fcfcfc99" />
-            </Pressable>
-          ) : null}
-        </View>
+        ) : null}
       </View>
 
-      <View className="px-3 pb-2 pt-2">
-        <View className="flex-row items-center gap-2 rounded-lg bg-raised/60 px-3 py-2">
-          <Search size={15} color="#fcfcfc99" />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search agents"
-            placeholderTextColor="#fcfcfc66"
-            accessibilityLabel="Search agents"
-            className="flex-1 text-[14px] text-ink"
-            style={Platform.OS === "web" ? ({ outlineStyle: "none" } as object) : undefined}
-            autoCorrect={false}
-            autoCapitalize="none"
-          />
+      <View className="px-3 pb-2">
+        <View className="min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-inset pl-3">
+          <Search size={16} color="#b8b8b8" />
+          <TextInput value={query} onChangeText={setQuery} placeholder="Search agents" placeholderTextColor="#a3a3a3"
+            accessibilityLabel="Search agents" className="min-w-0 flex-1 rounded-lg py-3 text-[14px] text-ink"
+            autoCorrect={false} autoCapitalize="none" returnKeyType="search" />
           {query ? (
-            <Pressable onPress={() => setQuery("")} accessibilityRole="button" accessibilityLabel="Clear search">
-              <X size={14} color="#fcfcfc99" />
+            <Pressable onPress={() => setQuery("")} className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
+              accessibilityRole="button" accessibilityLabel="Clear search">
+              <X size={16} color="#b8b8b8" />
             </Pressable>
-          ) : null}
+          ) : <View className="w-3" />}
+        </View>
+        <View className="mt-2 flex-row gap-1">
+          {[false, true].map((onlyUnread) => (
+            <Pressable key={String(onlyUnread)} onPress={() => setUnreadOnly(onlyUnread)} accessibilityRole="button"
+              accessibilityLabel={onlyUnread ? `Unread conversations, ${unreadCount}` : `All conversations, ${agents.length}`}
+              {...(Platform.OS === "web" ? { "aria-pressed": unreadOnly === onlyUnread } : { accessibilityState: { selected: unreadOnly === onlyUnread } })}
+              className={cn("min-h-11 flex-1 flex-row items-center justify-center gap-2 rounded-xl px-3", unreadOnly === onlyUnread ? "bg-raised" : "active:bg-raised/50")}>
+              <Text className={cn("text-[12px] font-semibold", unreadOnly === onlyUnread ? "text-ink" : "text-ink-secondary")}>
+                {onlyUnread ? "Unread" : "All agents"}
+              </Text>
+              <Text className="text-[11px] text-ink-secondary">{onlyUnread ? unreadCount : agents.length}</Text>
+            </Pressable>
+          ))}
         </View>
       </View>
 
       <ScrollView className="flex-1 px-2" contentContainerStyle={{ paddingBottom: 12 }} keyboardShouldPersistTaps="handled">
         {visible.length === 0 ? (
-          <Text className="px-3 py-6 text-center text-[13px] text-ink-secondary">No agents match “{query}”</Text>
+          <View className="items-center px-4 py-8" accessibilityLiveRegion="polite">
+            {unreadOnly && !query ? <CheckCheck size={24} color="#b8b8b8" /> : <Search size={24} color="#b8b8b8" />}
+            <Text className="mt-3 text-center text-[14px] font-semibold text-ink">
+              {query.trim() ? `No matches for “${query.trim()}”` : agents.length === 0 ? "No agents connected" : "All caught up"}
+            </Text>
+            <Text className="mt-2 text-center text-[12px] leading-5 text-ink-secondary">
+              {query.trim() ? "Try another name or clear your search." : agents.length === 0 ? "Check your channel in Settings." : "New replies will appear here."}
+            </Text>
+          </View>
         ) : null}
-        {visible.map((bot) => {
-          const selected = selectedId === bot.id;
-          const msgs = messagesByAgent[bot.id] ?? [];
-          const last = msgs[msgs.length - 1];
-          const subtitle =
-            bot.status === "busy" ? "Working…" : bot.status === "offline" ? "Offline" : bot.preview ?? bot.title ?? "";
+        {visible.map((agent) => {
+          const selected = selectedId === agent.id;
+          const messages = messagesByAgent[agent.id] ?? [];
+          const last = [...messages].reverse().find((message) => message.kind === "text");
+          const status = connection !== "connected" ? "offline" : agent.status;
+          const draft = draftsByAgent[agent.id]?.trim();
+          const subtitle = draft ? `Draft: ${draft}` : status === "busy" ? "Working…" : agent.preview ?? agent.title ?? "No messages yet";
           return (
-            <Pressable
-              key={bot.id}
-              onPress={() => {
-                selectAgent(bot.id);
-                if (compact) setSidebarOpen(false);
-              }}
+            <Pressable key={agent.id} onPress={() => { selectAgent(agent.id); if (compact) setSidebarOpen(false); }}
               accessibilityRole="button"
-              accessibilityState={{ selected }}
-              accessibilityLabel={`${bot.name}${bot.unread ? ", unread" : ""}. ${subtitle}`}
-              className={cn(
-                "mb-0.5 flex-row items-center gap-3 rounded-xl px-3 py-2.5",
-                selected ? "bg-raised" : "active:bg-raised/50",
-              )}
-            >
+              {...(Platform.OS === "web" ? { "aria-pressed": selected } : { accessibilityState: { selected } })}
+              accessibilityLabel={`${agent.name}${agent.unread ? ", unread" : ""}. ${STATUS_LABEL[status]}. ${subtitle}`}
+              className={cn("mb-1 flex-row items-center gap-3 rounded-xl px-3 py-3", selected ? "bg-raised" : "active:bg-raised/50")}>
               <View>
-                <BlobAvatar color={bot.color} name={bot.name} size={44} />
-                {bot.status === "busy" ? (
-                  <View className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-panel bg-warning" />
-                ) : bot.status === "offline" ? (
-                  <View className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-panel bg-ink-secondary" />
-                ) : null}
+                <BlobAvatar color={agent.color} name={agent.name} size={44} />
+                <View className={cn("absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-panel", STATUS_DOT[status])} />
               </View>
               <View className="min-w-0 flex-1">
                 <View className="flex-row items-baseline justify-between gap-2">
-                  <Text
-                    className={cn("flex-1 text-[15px] text-ink", bot.unread ? "font-bold" : "font-semibold")}
-                    numberOfLines={1}
-                  >
-                    {bot.name}
-                  </Text>
-                  {last ? (
-                    <Text className="text-[11px] text-ink-secondary">{formatTime(last.createdAt)}</Text>
-                  ) : null}
+                  <Text className={cn("min-w-0 flex-1 text-[15px] text-ink", agent.unread ? "font-bold" : "font-semibold")} numberOfLines={1}>{agent.name}</Text>
+                  {last ? <Text className="text-[11px] text-ink-secondary">{formatTime(last.createdAt)}</Text> : null}
                 </View>
-                <View className="flex-row items-center justify-between gap-2">
-                  <Text
-                    className={cn("flex-1 text-[13px]", bot.unread ? "text-ink" : "text-ink-secondary")}
-                    numberOfLines={1}
-                  >
-                    {subtitle}
-                  </Text>
-                  {bot.unread ? <View className="h-2 w-2 rounded-full bg-accent" /> : null}
+                <View className="mt-1 flex-row items-center justify-between gap-2">
+                  <Text className={cn("min-w-0 flex-1 text-[13px]", draft ? "text-warning" : agent.unread ? "text-ink" : "text-ink-secondary")} numberOfLines={1}>{subtitle}</Text>
+                  {agent.unread ? <View className="h-2 w-2 shrink-0 rounded-full bg-accent" /> : null}
                 </View>
               </View>
             </Pressable>
           );
         })}
       </ScrollView>
-
-      <View className="border-t border-hairline px-3 py-3" style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
-        <Pressable
-          onPress={() => router.push("/settings")}
-          accessibilityRole="button"
-          accessibilityLabel="Open settings"
-          className="flex-row items-center gap-3 rounded-xl px-3 py-2 active:bg-raised/50"
-        >
-          <Settings size={20} color="#fcfcfc99" />
+      <View className="border-t border-hairline px-3 pt-3" style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
+        <Pressable onPress={openSettings} accessibilityRole="button" accessibilityLabel="Open settings"
+          className="min-h-11 flex-row items-center gap-3 rounded-xl px-3 py-3 active:bg-raised/50">
+          <Settings size={20} color="#b8b8b8" />
           <Text className="text-[14px] text-ink">Settings</Text>
         </Pressable>
       </View>

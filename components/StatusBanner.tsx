@@ -2,6 +2,7 @@ import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { AlertTriangle, RefreshCw, WifiOff, X } from "lucide-react-native";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
+import { useRouter } from "expo-router";
 
 /**
  * Top-of-thread banner for connection problems and channel errors.
@@ -10,6 +11,7 @@ import { cn } from "@/lib/cn";
 export function StatusBanner() {
   const { connection, connectionDetail, lastError, reconnect, dismissError, settings, selectedId } =
     useStore();
+  const router = useRouter();
 
   const error = lastError && (!lastError.agentId || lastError.agentId === selectedId) ? lastError : null;
 
@@ -32,24 +34,26 @@ export function StatusBanner() {
         tone="danger"
         icon={<WifiOff size={14} color="#ff5667" />}
         action={
-          <Pressable
+          <View className="items-end gap-1"><Pressable
             onPress={() => void reconnect()}
             accessibilityRole="button"
             accessibilityLabel="Reconnect"
-            className="flex-row items-center gap-1 rounded-full bg-raised px-2.5 py-1 active:bg-raised-hover"
+            className="min-h-11 flex-row items-center gap-1 rounded-xl bg-raised px-3 py-2 active:bg-raised-hover"
           >
             <RefreshCw size={12} color="#fcfcfc" />
             <Text className="text-[12px] text-ink">Reconnect</Text>
           </Pressable>
+          {live ? <Pressable onPress={() => router.push("/settings")} accessibilityRole="button" accessibilityLabel="Edit connection settings"
+            className="min-h-11 justify-center rounded-xl px-3 py-2 active:bg-raised"><Text className="text-[12px] text-ink">Settings</Text></Pressable> : null}</View>
         }
       >
-        <Text className="text-[13px] text-ink" numberOfLines={2}>
+        <Text className="text-[13px] leading-5 text-ink">
           {connection === "error" ? "Channel error" : "Disconnected"}
           {connectionDetail ? ` · ${connectionDetail}` : ""}
         </Text>
         {live ? (
-          <Text className="text-[11px] text-ink-secondary" numberOfLines={2}>
-            Live mode needs the zakurabot platform on the server. Switch back to mock in Settings.
+          <Text className="mt-1 text-[12px] leading-5 text-ink-secondary">
+            Check your connection settings or use the mock channel to try the demo.
           </Text>
         ) : null}
       </Banner>
@@ -66,13 +70,13 @@ export function StatusBanner() {
           onPress={dismissError}
           accessibilityRole="button"
           accessibilityLabel="Dismiss error"
-          className="rounded-full p-1 active:bg-raised"
+          className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
         >
           <X size={14} color="#fcfcfc99" />
         </Pressable>
       }
     >
-      <Text className="text-[13px] text-ink" numberOfLines={3}>
+      <Text className="text-[13px] leading-5 text-ink">
         {error?.message}
       </Text>
     </Banner>
@@ -93,6 +97,7 @@ function Banner({
   return (
     <View
       accessibilityLiveRegion="polite"
+      accessibilityRole={tone === "muted" ? undefined : "alert"}
       className={cn(
         "mx-4 mb-2 flex-row items-center gap-2 rounded-xl border px-3 py-2",
         tone === "muted" && "border-hairline bg-panel",

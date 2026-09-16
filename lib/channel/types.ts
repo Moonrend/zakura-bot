@@ -7,25 +7,28 @@
  * connects, fails, and reports a clear error state.
  */
 
-import type { ChatMessage } from "../types";
+import type { Agent, ChatMessage } from "../types";
+
+export const MAX_MESSAGE_LENGTH = 4000;
 
 export type ChannelConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
 export type ChannelEvent =
   | { type: "connection"; state: ChannelConnectionState; detail?: string }
+  | { type: "agents"; agents: Agent[] }
   | { type: "message"; message: ChatMessage }
   | { type: "message_delta"; agentId: string; messageId: string; delta: string }
   | { type: "message_done"; agentId: string; messageId: string; interrupted?: boolean }
   | { type: "tool_activity"; agentId: string; message: ChatMessage }
   | { type: "typing"; agentId: string; active: boolean }
-  | { type: "error"; message: string; agentId?: string };
+  | { type: "error"; message: string; agentId?: string; clientMessageId?: string };
 
 export type ChannelListener = (event: ChannelEvent) => void;
 
 export interface SendMessageInput {
   agentId: string;
   text: string;
-  /** Client-generated id; server may echo or remap */
+  /** Stable idempotency key. The server must include it in its user echo. */
   clientMessageId?: string;
 }
 
@@ -41,7 +44,8 @@ export interface ZakuraChannelClient {
   /**
    * Send a user message into the agent thread.
    * Rejects (throws) when the channel is not connected so the UI can keep
-   * the draft and mark the message as failed.
+   * the draft and mark the message as failed. Resolution means written to the
+   * transport, not acknowledged by the server; a user echo confirms delivery.
    */
   sendMessage(input: SendMessageInput): Promise<void>;
   /** Optional interrupt for the current turn. */

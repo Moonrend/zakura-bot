@@ -29,6 +29,8 @@ yarn-error.*
 *.env
 # typescript
 *.tsbuildinfo
+test-results/
+playwright-report/
 # IDE
 .idea/
 .vscode/

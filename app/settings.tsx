@@ -1,104 +1,96 @@
-import { useState } from "react";
-import {
-  Pressable,
-  ScrollView,
-  Switch,
-  Text,
-  TextInput,
-  View,
-  Platform,
-} from "react-native";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, Platform, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { Check, Save } from "lucide-react-native";
 import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStore } from "@/lib/store";
+import { validateLiveSettings } from "@/lib/channel";
+import { DEFAULT_SETTINGS } from "@/lib/types";
 
 export default function SettingsScreen() {
-  const { settings, updateSettings, connection } = useStore();
+  const { settings, settingsReady, updateSettings, connection, transportLabel } = useStore();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [baseUrl, setBaseUrl] = useState(settings.zakuraBaseUrl);
   const [token, setToken] = useState(settings.authToken);
   const [useMock, setUseMock] = useState(settings.useMockChannel);
+  const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!settingsReady || dirty) return;
+    setBaseUrl(settings.zakuraBaseUrl);
+    setToken(settings.authToken);
+    setUseMock(settings.useMockChannel);
+  }, [settings, settingsReady, dirty]);
+
+  const edit = () => { setDirty(true); setSaved(false); setError(null); };
   const onSave = async () => {
-    await updateSettings({
-      zakuraBaseUrl: baseUrl.trim() || "http://127.0.0.1:8787",
-      authToken: token,
-      useMockChannel: useMock,
-    });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
+    if (saving || !settingsReady) return;
+    const next = { zakuraBaseUrl: baseUrl.trim() || (useMock ? DEFAULT_SETTINGS.zakuraBaseUrl : ""), authToken: token.trim(), useMockChannel: useMock };
+    const problem = useMock ? null : validateLiveSettings({ baseUrl: next.zakuraBaseUrl, token: next.authToken });
+    if (problem) { setError(problem); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      await updateSettings(next);
+      setSaved(true);
+      setDirty(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save settings. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
-
-  const inputStyle =
-    Platform.OS === "web" ? ({ outlineStyle: "none" } as object) : undefined;
+  const close = () => router.canGoBack() ? router.back() : router.replace("/");
 
   return (
-    <ScrollView className="flex-1 bg-app" contentContainerStyle={{ padding: 20 }}>
-      <Text className="mb-1 text-[13px] uppercase tracking-wide text-ink-secondary">
-        Zakura connection
+    <ScrollView className="flex-1 bg-app" keyboardShouldPersistTaps="handled"
+      contentContainerStyle={{ padding: 20, paddingBottom: Math.max(insets.bottom, 20), width: "100%", maxWidth: 680, alignSelf: "center" }}>
+      <Text className="mb-2 text-[20px] font-semibold text-ink" accessibilityRole="header">Your connection</Text>
+      <Text className="mb-6 text-[14px] leading-6 text-ink-secondary">
+        {settingsReady ? `${transportLabel} channel · ${connection}` : "Loading saved settings…"}
       </Text>
-      <Text className="mb-4 text-[13px] text-ink-secondary">
-        Phase 1 stores these locally for the future live channel. The app currently
-        uses MockZakuraChannelClient ({connection}).
-      </Text>
-
-      <Text className="mb-1.5 text-[13px] text-ink">Base URL</Text>
-      <TextInput
-        value={baseUrl}
-        onChangeText={setBaseUrl}
-        autoCapitalize="none"
-        autoCorrect={false}
-        placeholder="http://127.0.0.1:8787"
-        placeholderTextColor="#fcfcfc66"
-        className="mb-4 rounded-xl border border-hairline bg-panel px-4 py-3 text-[15px] text-ink"
-        style={inputStyle}
-      />
-
-      <Text className="mb-1.5 text-[13px] text-ink">Auth token</Text>
-      <TextInput
-        value={token}
-        onChangeText={setToken}
-        autoCapitalize="none"
-        autoCorrect={false}
-        secureTextEntry
-        placeholder="Device / API token (not committed)"
-        placeholderTextColor="#fcfcfc66"
-        className="mb-4 rounded-xl border border-hairline bg-panel px-4 py-3 text-[15px] text-ink"
-        style={inputStyle}
-      />
-
-      <View className="mb-6 flex-row items-center justify-between rounded-xl border border-hairline bg-panel px-4 py-3">
-        <View className="mr-3 flex-1">
-          <Text className="text-[15px] text-ink">Use mock channel</Text>
-          <Text className="text-[12px] text-ink-secondary">
-            Live WS/SSE client is stubbed — keep mock on until zakurabot ships.
-          </Text>
+      <View className="mb-6 flex-row items-center justify-between rounded-2xl border border-hairline bg-panel px-4 py-4">
+        <View className="mr-4 min-w-0 flex-1">
+          <Text className="text-[15px] font-semibold text-ink">Use mock channel</Text>
+          <Text className="mt-1 text-[13px] leading-5 text-ink-secondary">Try local demo conversations and streaming replies.</Text>
         </View>
-        <Switch
-          value={useMock}
-          onValueChange={setUseMock}
-          trackColor={{ false: "#333", true: "#1084fe" }}
-        />
+        <Switch value={useMock} onValueChange={(value) => { edit(); setUseMock(value); }}
+          disabled={!settingsReady || saving} accessibilityLabel="Use mock channel"
+          trackColor={{ false: "#444", true: "#1084fe" }} />
       </View>
-
-      <Pressable
-        onPress={() => void onSave()}
-        className="items-center rounded-xl bg-accent py-3.5"
-      >
-        <Text className="text-[15px] font-semibold text-ink">
-          {saved ? "Saved" : "Save"}
-        </Text>
+      <Text className="mb-2 text-[13px] font-semibold text-ink">Base URL</Text>
+      <TextInput value={baseUrl} onChangeText={(value) => { edit(); setBaseUrl(value); }}
+        editable={settingsReady && !saving} autoCapitalize="none" autoCorrect={false} keyboardType="url"
+        accessibilityLabel="Zakura Base URL" placeholder="https://zakura.example.com" placeholderTextColor="#a3a3a3"
+        className="mb-5 min-h-11 rounded-xl border border-hairline bg-panel px-4 py-3 text-[15px] text-ink" />
+      <Text className="mb-2 text-[13px] font-semibold text-ink">Auth token</Text>
+      <TextInput value={token} onChangeText={(value) => { edit(); setToken(value); }}
+        editable={settingsReady && !saving} autoCapitalize="none" autoCorrect={false} autoComplete="off" secureTextEntry
+        accessibilityLabel="Auth token" placeholder="Device or API token" placeholderTextColor="#a3a3a3"
+        className="mb-5 min-h-11 rounded-xl border border-hairline bg-panel px-4 py-3 text-[15px] text-ink" />
+      <Text className="mb-6 text-[13px] leading-6 text-ink-secondary">
+        Live mode requires a Zakura server with the zakurabot channel adapter. The client is ready for integration; that server adapter is not included yet.
+      </Text>
+      {error ? <View className="mb-4 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3" accessibilityRole="alert" accessibilityLiveRegion="polite">
+        <Text className="text-[13px] leading-5 text-danger">{error}</Text>
+      </View> : null}
+      <Pressable onPress={() => void onSave()} disabled={!settingsReady || saving}
+        accessibilityRole="button" accessibilityLabel="Save settings" accessibilityState={{ disabled: !settingsReady || saving, busy: saving }}
+        className="min-h-11 flex-row items-center justify-center gap-2 rounded-xl bg-accent py-3.5 active:opacity-80">
+        {saving ? <ActivityIndicator size="small" color="#070707" /> : saved ? <Check size={18} color="#070707" /> : <Save size={17} color="#070707" />}
+        <Text className="text-[15px] font-semibold text-app">{saving ? "Saving…" : saved ? "Saved" : "Save settings"}</Text>
       </Pressable>
-
-      <Pressable onPress={() => router.back()} className="mt-3 items-center py-3">
+      <Text accessibilityLiveRegion="polite" className="mt-2 text-center text-[12px] text-ink-secondary">{saved ? "Settings saved on this device." : " "}</Text>
+      <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Close settings"
+        className="mt-2 min-h-11 items-center justify-center rounded-xl py-3 active:bg-panel">
         <Text className="text-[14px] text-ink-secondary">Close</Text>
       </Pressable>
-
-      <Text className="mt-8 text-[12px] leading-5 text-ink-secondary">
-        Tokens stay on-device (AsyncStorage). Never commit secrets. See
-        docs/architecture.md for how this app will bind as platform{" "}
-        <Text className="font-mono text-ink">zakurabot</Text> using{" "}
-        <Text className="font-mono text-ink">chat_reply</Text>.
+      <Text className="mt-6 text-[12px] leading-5 text-ink-secondary">
+        {Platform.OS === "web" ? "The URL and token are stored in this browser." : "The URL and token are stored locally on this device."} Conversation history and drafts stay in memory and reset when the app reloads or you switch channels.
       </Text>
     </ScrollView>
   );

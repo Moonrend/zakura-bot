@@ -13,7 +13,7 @@ module.exports = {
         inset: "#191919",
         hairline: "#333333",
         ink: "#fcfcfc",
-        "ink-secondary": "rgba(252,252,252,0.6)",
+        "ink-secondary": "#b3b3b3",
         accent: "#1084fe",
         "accent-border": "#459ffe",
         "bubble-user": "#5a5a5a",

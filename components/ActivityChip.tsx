@@ -1,46 +1,36 @@
-import { ActivityIndicator, Text, View } from "react-native";
-import { Check, X } from "lucide-react-native";
+import { useState } from "react";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { Check, ChevronDown, ChevronUp, Square, Wrench, X } from "lucide-react-native";
 import type { ToolActivity } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
-/** Grok-style tool activity chip: spinner while running, check / x when settled. */
-export function ActivityChip({ tool }: { tool: ToolActivity }) {
-  const failed = tool.ok === false;
-  const running = tool.ok === undefined;
-  const status = running ? "running" : failed ? "failed" : "done";
+export function ActivityChip({ tool, reducedMotion = false }: { tool: ToolActivity; reducedMotion?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const stopped = !!tool.interrupted;
+  const failed = !stopped && tool.ok === false;
+  const running = !stopped && tool.ok === undefined;
+  const status = stopped ? "Stopped" : running ? "Running" : failed ? "Failed" : "Done";
+  const icon = stopped ? <Square size={12} color="#b3b3b3" />
+    : failed ? <X size={14} color="#ff5667" />
+      : running ? reducedMotion ? <Wrench size={14} color="#b3b3b3" /> : <ActivityIndicator size="small" color="#b3b3b3" />
+        : <Check size={14} color="#38d591" />;
+
   return (
-    <View className="mb-2 flex-row justify-start pl-1">
-      <View
-        accessibilityRole="text"
-        accessibilityLabel={`Tool ${tool.name} ${status}${tool.detail ? `, ${tool.detail}` : ""}`}
-        className={cn(
-          "flex-row items-center gap-2 rounded-full border border-hairline bg-panel px-3 py-1.5",
-          running && "border-accent-border/40",
-          failed && "border-danger/50 bg-danger/10",
-        )}
-      >
-        {running ? (
-          <ActivityIndicator size="small" color="#fcfcfc99" />
-        ) : failed ? (
-          <X size={13} color="#ff5667" />
-        ) : (
-          <Check size={13} color="#38d591" />
-        )}
-        <Text
-          className={cn("font-mono text-[13px]", failed ? "text-danger" : "text-ink")}
-          numberOfLines={1}
-        >
-          {tool.name}
-        </Text>
-        {tool.detail ? (
-          <Text
-            className={cn("max-w-[220px] text-[12px]", failed ? "text-danger/80" : "text-ink-secondary")}
-            numberOfLines={1}
-          >
-            {tool.detail}
-          </Text>
-        ) : null}
-      </View>
+    <View className="mb-2 max-w-full items-start">
+      <Pressable onPress={() => setExpanded((value) => !value)} disabled={!tool.detail}
+        accessibilityRole={tool.detail ? "button" : "text"}
+        accessibilityLabel={`Tool ${tool.name}, ${status}${tool.detail ? `: ${tool.detail}` : ""}`}
+        accessibilityState={tool.detail ? { expanded } : undefined}
+        className={cn("max-w-full rounded-2xl border border-hairline bg-panel px-3 py-2.5",
+          running && "border-accent-border/50", failed && "border-danger/50 bg-danger/10")}>
+        <View className="min-h-6 max-w-full flex-row items-center gap-2">
+          {icon}
+          <Text className={cn("min-w-0 shrink font-mono text-[12px]", failed ? "text-danger" : "text-ink")} numberOfLines={1}>{tool.name}</Text>
+          <Text className={cn("shrink-0 text-[11px]", failed ? "text-danger" : "text-ink-secondary")}>{status}</Text>
+          {tool.detail ? expanded ? <ChevronUp size={14} color="#b3b3b3" /> : <ChevronDown size={14} color="#b3b3b3" /> : null}
+        </View>
+        {expanded && tool.detail ? <Text className="mt-2 text-[12px] leading-5 text-ink-secondary" selectable>{tool.detail}</Text> : null}
+      </Pressable>
     </View>
   );
 }

@@ -1,45 +1,44 @@
-import { Text } from "react-native";
-import { cn } from "@/lib/cn";
+import { Text, View } from "react-native";
+import { ExternalLink } from "./ExternalLink";
 
-/**
- * Minimal inline Markdown renderer for chat bubbles: **bold**, `code`, and
- * simple "• " bullets. Full Markdown (chat_reply text is Markdown) can swap in
- * later without touching MessageBubble.
- */
-export function RichText({ text, streaming }: { text: string; streaming?: boolean }) {
-  const lines = text.split("\n");
+/** Small, selectable Markdown subset. HTML is always displayed as text. */
+export function RichText({ text, streaming, raw = false }: { text: string; streaming?: boolean; raw?: boolean }) {
+  if (raw) return <Text testID="message-text" className="text-[15px] leading-[22px] text-ink" selectable>{text}</Text>;
+  const blocks: { code: boolean; text: string; language?: string }[] = [];
+  const fences = /```([^\n`]*)\n([\s\S]*?)(?:```|$)/g;
+  let offset = 0;
+  for (const match of text.matchAll(fences)) {
+    if (match.index > offset) blocks.push({ code: false, text: text.slice(offset, match.index) });
+    blocks.push({ code: true, text: match[2], language: match[1].trim() });
+    offset = match.index + match[0].length;
+  }
+  if (offset < text.length || blocks.length === 0) blocks.push({ code: false, text: text.slice(offset) });
   return (
-    <Text className="text-[15px] leading-[22px] text-ink" selectable>
-      {lines.map((line, li) => (
-        <Text key={li}>
-          {li > 0 ? "\n" : null}
-          {renderInline(line)}
+    <View className="min-w-0 max-w-full">
+      {blocks.map((block, index) => block.code ? (
+        <View key={index} className="my-2 max-w-full rounded-xl border border-hairline bg-inset p-3">
+          {block.language ? <Text className="mb-2 text-[11px] text-ink-secondary">{block.language}</Text> : null}
+          <Text testID="message-text" className="font-mono text-[13px] leading-5 text-ink" selectable>{block.text.replace(/\n$/, "")}</Text>
+        </View>
+      ) : (
+        <Text key={index} testID="message-text" className="text-[15px] leading-[22px] text-ink" selectable>
+          {block.text.split("\n").map((line, lineIndex) => (
+            <Text key={lineIndex}>{lineIndex ? "\n" : null}{renderInline(line.replace(/^[-*] /, "• "))}</Text>
+          ))}
         </Text>
       ))}
-      {streaming ? <Text className="text-accent">▍</Text> : null}
-    </Text>
+      {streaming ? <Text accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="text-accent-border">▍</Text> : null}
+    </View>
   );
 }
 
-const TOKEN = /(\*\*[^*]+\*\*|`[^`]+`)/g;
-
+const TOKEN = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g;
 function renderInline(line: string) {
-  const parts = line.split(TOKEN).filter((p) => p.length > 0);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
-      return (
-        <Text key={i} className="font-semibold">
-          {part.slice(2, -2)}
-        </Text>
-      );
-    }
-    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
-      return (
-        <Text key={i} className={cn("rounded bg-inset px-1 font-mono text-[13px] text-ink")}>
-          {part.slice(1, -1)}
-        </Text>
-      );
-    }
-    return <Text key={i}>{part}</Text>;
+  return line.split(TOKEN).filter(Boolean).map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) return <Text key={index} className="font-semibold">{part.slice(2, -2)}</Text>;
+    if (part.startsWith("`") && part.endsWith("`")) return <Text key={index} className="bg-inset font-mono text-[13px] text-ink">{part.slice(1, -1)}</Text>;
+    const link = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(part);
+    if (link) return <ExternalLink key={index} label={link[1]} url={link[2]} />;
+    return <Text key={index}>{part}</Text>;
   });
 }

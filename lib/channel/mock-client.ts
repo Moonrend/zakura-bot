@@ -9,9 +9,10 @@
  *   - text containing "slow"  → longer stream (useful for testing Stop)
  */
 
-import type { ChatMessage } from "../types";
+import type { Agent, ChatMessage } from "../types";
 import {
   ChannelEmitter,
+  MAX_MESSAGE_LENGTH,
   uid,
   type ChannelConnectionState,
   type ChannelListener,
@@ -26,7 +27,15 @@ function sleep(ms: number): Promise<void> {
 interface ActiveTurn {
   generation: number;
   replyId?: string;
+  tool?: ChatMessage;
 }
+
+export const DEMO_AGENTS: Agent[] = [
+  { id: "agent_zakura", name: "Zakura", title: "Platform agent", color: "#1084fe", status: "idle", unread: false },
+  { id: "agent_research", name: "Research", title: "Briefs & digests", color: "#38d591", status: "idle", unread: true,
+    preview: "Your research workspace is ready." },
+  { id: "agent_ops", name: "Ops", title: "Routines", color: "#ff9800", status: "offline", unread: false },
+];
 
 export class MockZakuraChannelClient implements ZakuraChannelClient {
   readonly label = "Mock";
@@ -35,6 +44,8 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
   /** One in-flight turn per agent; bumping `generation` cancels the old one. */
   private turns = new Map<string, ActiveTurn>();
   private generation = 0;
+  private connectionGeneration = 0;
+  private connecting: Promise<void> | null = null;
 
   getConnectionState(): ChannelConnectionState {
     return this.state;
@@ -51,12 +62,21 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
 
   async connect(): Promise<void> {
     if (this.state === "connected") return;
+    if (this.connecting) return this.connecting;
+    const generation = ++this.connectionGeneration;
     this.setState("connecting");
-    await sleep(250);
-    this.setState("connected", "mock transport");
+    this.connecting = sleep(250).then(() => {
+      if (generation !== this.connectionGeneration) return;
+      this.emitter.emit({ type: "agents", agents: DEMO_AGENTS });
+      this.setState("connected", "mock transport");
+      this.connecting = null;
+    });
+    return this.connecting;
   }
 
   disconnect(): void {
+    this.connectionGeneration += 1;
+    this.connecting = null;
     // Cancel every in-flight turn so no timers touch the store afterwards.
     for (const [agentId, turn] of this.turns) {
       this.finishTurn(agentId, turn, true);
@@ -70,6 +90,10 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
   }
 
   private finishTurn(agentId: string, turn: ActiveTurn, interrupted: boolean) {
+    if (turn.tool?.tool?.ok === undefined && turn.tool?.tool) {
+      this.emitter.emit({ type: "tool_activity", agentId, message: { ...turn.tool,
+        tool: { ...turn.tool.tool, interrupted: true, detail: "Stopped" } } });
+    }
     if (turn.replyId) {
       this.emitter.emit({
         type: "message_done",
@@ -86,6 +110,10 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
       throw new Error("Not connected to Zakura channel");
     }
     const { agentId } = input;
+    if (!DEMO_AGENTS.some((agent) => agent.id === agentId && agent.status !== "offline")) {
+      throw new Error("This agent is offline. Choose an available agent.");
+    }
+    if (!input.text.trim() || input.text.length > MAX_MESSAGE_LENGTH) throw new Error("Message is empty or too long.");
 
     // Echo the user message back as the server would (ids are stable).
     const userMsg: ChatMessage = {
@@ -131,35 +159,28 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
       tool: { name: "chat_reply", ok: undefined, detail: "composing reply" },
       createdAt: Date.now(),
     };
+    turn.tool = toolRunning;
     this.emitter.emit({ type: "tool_activity", agentId, message: toolRunning });
 
     await sleep(600);
     if (!this.isCurrent(agentId, generation)) return;
 
     if (shouldFail) {
+      turn.tool = { ...toolRunning, tool: { name: "chat_reply", ok: false, detail: "Reply could not be delivered (demo)" } };
       this.emitter.emit({
         type: "tool_activity",
         agentId,
-        message: {
-          ...toolRunning,
-          tool: { name: "chat_reply", ok: false, detail: "channel rejected payload (mock)" },
-        },
+        message: turn.tool,
       });
       this.emitter.emit({
         type: "error",
         agentId,
-        message: "Mock failure: the agent's chat_reply was rejected. Try again without “fail”.",
+        message: "Demo reply failed. Send another message without “fail” to try again.",
       });
       this.turns.delete(agentId);
       this.finishTurn(agentId, turn, false);
       return;
     }
-
-    this.emitter.emit({
-      type: "tool_activity",
-      agentId,
-      message: { ...toolRunning, tool: { name: "chat_reply", ok: true, detail: "sent" } },
-    });
 
     const replyId = uid("asst");
     turn.replyId = replyId;
@@ -183,6 +204,8 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
       this.emitter.emit({ type: "message_delta", agentId, messageId: replyId, delta: chunk });
     }
 
+    turn.tool = { ...toolRunning, tool: { name: "chat_reply", ok: true, detail: "Delivered" } };
+    this.emitter.emit({ type: "tool_activity", agentId, message: turn.tool });
     this.turns.delete(agentId);
     this.finishTurn(agentId, turn, false);
   }
@@ -233,7 +256,7 @@ export function createDemoMessages(agentId: string): ChatMessage[] {
       agentId,
       role: "assistant",
       kind: "text",
-      text: "Welcome to Zakura Bot — a Grok Bot–inspired chat client for the Zakura platform.",
+      text: "Welcome to Zakura Bot. Your agents and conversations, in one place.",
       createdAt: now - 120_000,
     },
     {
@@ -241,7 +264,7 @@ export function createDemoMessages(agentId: string): ChatMessage[] {
       agentId,
       role: "user",
       kind: "text",
-      text: "How will this bind as a Zakura channel?",
+      text: "What can I try here?",
       createdAt: now - 90_000,
     },
     {
@@ -249,7 +272,7 @@ export function createDemoMessages(agentId: string): ChatMessage[] {
       agentId,
       role: "assistant",
       kind: "activity",
-      tool: { name: "remote_channel.lookup", ok: true, detail: "platform=zakurabot" },
+      tool: { name: "workspace.search", ok: true, detail: "Checked the demo workspace" },
       createdAt: now - 85_000,
     },
     {
@@ -257,7 +280,7 @@ export function createDemoMessages(agentId: string): ChatMessage[] {
       agentId,
       role: "assistant",
       kind: "text",
-      text: "Moonrend/Zakura will add a remote-channel platform `zakurabot`. Agents reply with the `chat_reply` tool. This app is the messaging surface — not a separate agent runtime. See docs/architecture.md.",
+      text: "You're in **demo mode**. Try a conversation, switch between agents, and watch replies arrive. You can configure a live connection in Settings when your server supports it.",
       createdAt: now - 80_000,
     },
     {
@@ -281,7 +304,7 @@ export function createDemoMessages(agentId: string): ChatMessage[] {
       agentId,
       role: "assistant",
       kind: "text",
-      text: "Tool-activity chips appear above bubbles while the agent works. Send a message below to try the mock stream — type “help” for test triggers.",
+      text: "Send a message below to try a streaming reply. Include **slow** to try Stop, or **fail** to see how errors appear. Click a tool chip to see its details.",
       createdAt: now - 30_000,
     },
   ];

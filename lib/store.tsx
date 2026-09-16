@@ -1,69 +1,22 @@
-import React, {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { AppState, Platform } from "react-native";
 import {
-  createChannelClient,
-  createDemoMessages,
-  uid,
-  type ChannelConnectionState,
-  type ChannelEvent,
-  type ZakuraChannelClient,
+  createChannelClient, createDemoMessages, uid, validateLiveSettings,
+  type ChannelConnectionState, type ZakuraChannelClient,
 } from "./channel";
+import { DEMO_AGENTS } from "./channel/mock-client";
+import { MAX_MESSAGE_LENGTH } from "./channel/types";
+import { chatReducer, emptyChatState, previewFromMessages, type ChatAction, type ChannelError } from "./chat-state";
 import { loadSettings, saveSettings } from "./settings";
-import {
-  DEFAULT_SETTINGS,
-  type Agent,
-  type AppSettings,
-  type ChatMessage,
-} from "./types";
+import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage } from "./types";
 
-const DEMO_AGENTS: Agent[] = [
-  {
-    id: "agent_zakura",
-    name: "Zakura",
-    title: "Platform agent",
-    color: "#1084fe",
-    status: "idle",
-    unread: false,
-    preview: "Welcome to Zakura Bot…",
-  },
-  {
-    id: "agent_research",
-    name: "Research",
-    title: "Briefs & digests",
-    color: "#38d591",
-    status: "idle",
-    unread: true,
-    preview: "Weekly competitor brief ready",
-  },
-  {
-    id: "agent_ops",
-    name: "Ops",
-    title: "Routines",
-    color: "#ff9800",
-    status: "offline",
-    unread: false,
-    preview: "No messages yet",
-  },
-];
-
-export interface ChannelError {
-  id: string;
-  message: string;
-  agentId?: string;
-  at: number;
-}
+export type { ChannelError } from "./chat-state";
 
 type StoreValue = {
   agents: Agent[];
   selectedId: string;
   messagesByAgent: Record<string, ChatMessage[]>;
+  draftsByAgent: Record<string, string>;
   typing: Record<string, boolean>;
   settings: AppSettings;
   settingsReady: boolean;
@@ -73,356 +26,227 @@ type StoreValue = {
   lastError: ChannelError | null;
   sidebarOpen: boolean;
   selectAgent: (id: string) => void;
-  /** Resolves true when the message was accepted by the channel. */
-  send: (text: string) => Promise<boolean>;
-  /** Re-send a message that previously failed. */
+  setDraft: (agentId: string, text: string) => void;
+  /** Clear only the submitted draft; never overwrite text typed while awaiting send. */
+  clearDraft: (agentId: string, submitted: string) => void;
+  send: (text: string, agentId?: string) => Promise<boolean>;
   retryMessage: (messageId: string) => Promise<boolean>;
   interrupt: () => Promise<void>;
   reconnect: () => Promise<void>;
   dismissError: () => void;
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
   setSidebarOpen: (open: boolean) => void;
+  setThreadVisible: (visible: boolean) => void;
 };
 
 const StoreContext = createContext<StoreValue | null>(null);
 
-function previewOf(m: ChatMessage): string | undefined {
-  if (m.kind === "activity" && m.tool) return `⚙ ${m.tool.name}`;
-  if (m.text) return m.text.replace(/\s+/g, " ").trim();
-  return undefined;
-}
-
-function previewFromMessages(msgs: ChatMessage[]): string | undefined {
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const p = previewOf(msgs[i]);
-    if (p) return p;
-  }
-  return undefined;
-}
-
-/** Insert or merge a message, keeping the list ordered by createdAt (stable for ties). */
-function upsertInto(list: ChatMessage[], message: ChatMessage): ChatMessage[] {
-  const idx = list.findIndex((m) => m.id === message.id);
-  if (idx >= 0) {
-    return list.map((m, i) => (i === idx ? { ...m, ...message } : m));
-  }
-  // Fast path: newest message goes to the end (the common case).
-  const last = list[list.length - 1];
-  if (!last || last.createdAt <= message.createdAt) return [...list, message];
-  const next = [...list];
-  let pos = next.length;
-  while (pos > 0 && next[pos - 1].createdAt > message.createdAt) pos--;
-  next.splice(pos, 0, message);
-  return next;
+function demoTranscript(): Record<string, ChatMessage[]> {
+  return {
+    agent_zakura: createDemoMessages("agent_zakura"),
+    agent_research: [{ id: "research_welcome", agentId: "agent_research", role: "assistant", kind: "text",
+      text: "Your research workspace is ready. Try a question here, then switch conversations while the reply arrives.", createdAt: Date.now() - 10_000 }],
+    agent_ops: [],
+  };
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [agents, setAgents] = useState<Agent[]>(DEMO_AGENTS);
-  const [selectedId, setSelectedId] = useState(DEMO_AGENTS[0].id);
-  const selectedRef = useRef(selectedId);
-  selectedRef.current = selectedId;
-
-  const [messagesByAgent, setMessagesByAgent] = useState<Record<string, ChatMessage[]>>({
-    agent_zakura: createDemoMessages("agent_zakura"),
-    agent_research: [
-      {
-        id: "r1",
-        agentId: "agent_research",
-        role: "assistant",
-        kind: "text",
-        text: "Research agent is a placeholder roster entry. Wire it to a Zakura agent id after the zakurabot channel lands.",
-        createdAt: Date.now() - 10_000,
-      },
-    ],
-    agent_ops: [],
-  });
-  const [typing, setTyping] = useState<Record<string, boolean>>({});
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [settingsReady, setSettingsReady] = useState(false);
-  const [connection, setConnection] = useState<ChannelConnectionState>("disconnected");
-  const [connectionDetail, setConnectionDetail] = useState<string | undefined>();
-  const [transportLabel, setTransportLabel] = useState("Mock");
-  const [lastError, setLastError] = useState<ChannelError | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-
-  const clientRef = useRef<ZakuraChannelClient | null>(null);
-
-  const upsertMessage = useCallback((message: ChatMessage) => {
-    setMessagesByAgent((prev) => ({
-      ...prev,
-      [message.agentId]: upsertInto(prev[message.agentId] ?? [], message),
-    }));
-    setAgents((prev) =>
-      prev.map((a) => {
-        if (a.id !== message.agentId) return a;
-        const preview = previewOf(message) ?? a.preview;
-        // Only assistant output marks a thread unread, and only when not focused.
-        const unread =
-          message.role === "assistant" && a.id !== selectedRef.current ? true : a.unread;
-        return { ...a, preview, unread, status: a.status === "offline" ? "idle" : a.status };
-      }),
-    );
+  // Start empty on both the server and browser. Demo dates are created after hydration.
+  const [state, setState] = useState(emptyChatState);
+  const stateRef = useRef(state);
+  const dispatch = useCallback((action: ChatAction) => {
+    const next = chatReducer(stateRef.current, action);
+    stateRef.current = next;
+    setState(next);
   }, []);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const settingsRef = useRef(settings);
+  const [settingsReady, setSettingsReady] = useState(false);
+  const [transportLabel, setTransportLabel] = useState("Mock");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const clientRef = useRef<ZakuraChannelClient | null>(null);
+  const disposeRef = useRef<(() => void) | null>(null);
+  const scopeRef = useRef<string | null>(null);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const screenVisible = useRef(false);
+  const foreground = useRef(true);
 
-  const handleEvent = useCallback(
-    (event: ChannelEvent) => {
-      switch (event.type) {
-        case "connection":
-          setConnection(event.state);
-          setConnectionDetail(event.detail);
-          if (event.state === "connected") setLastError(null);
-          break;
-        case "message":
-        case "tool_activity":
-          upsertMessage(event.message);
-          break;
-        case "message_delta":
-          setMessagesByAgent((prev) => {
-            const list = prev[event.agentId] ?? [];
-            return {
-              ...prev,
-              [event.agentId]: list.map((m) =>
-                m.id === event.messageId
-                  ? { ...m, text: (m.text ?? "") + event.delta, streaming: true }
-                  : m,
-              ),
-            };
-          });
-          break;
-        case "message_done":
-          setMessagesByAgent((prev) => {
-            const list = prev[event.agentId] ?? [];
-            const updated = list.map((m) =>
-              m.id === event.messageId
-                ? { ...m, streaming: false, interrupted: event.interrupted || undefined }
-                : m,
-            );
-            const preview = previewFromMessages(updated);
-            setAgents((ags) =>
-              ags.map((a) => (a.id === event.agentId ? { ...a, preview: preview ?? a.preview } : a)),
-            );
-            return { ...prev, [event.agentId]: updated };
-          });
-          break;
-        case "typing":
-          setTyping((t) => ({ ...t, [event.agentId]: event.active }));
-          setAgents((ags) =>
-            ags.map((a) =>
-              a.id === event.agentId ? { ...a, status: event.active ? "busy" : "idle" } : a,
-            ),
-          );
-          break;
-        case "error":
-          setLastError({ id: uid("err"), message: event.message, agentId: event.agentId, at: Date.now() });
-          break;
-      }
-    },
-    [upsertMessage],
-  );
-  const handleEventRef = useRef(handleEvent);
-  handleEventRef.current = handleEvent;
+  const setThreadVisible = useCallback((visible: boolean) => {
+    screenVisible.current = visible;
+    dispatch({ type: "view", visible: visible && foreground.current });
+  }, [dispatch]);
 
-  /** Tear down the current client and build one from `settings`. */
-  const bootClient = useCallback(async (s: AppSettings) => {
-    clientRef.current?.disconnect();
-    setTyping({});
-    setAgents((ags) => ags.map((a) => ({ ...a, status: a.status === "busy" ? "idle" : a.status })));
-    const client = createChannelClient(s);
+  useEffect(() => {
+    const syncForeground = () => {
+      foreground.current = Platform.OS === "web" && typeof document !== "undefined"
+        ? document.visibilityState !== "hidden" : AppState.currentState === "active";
+      dispatch({ type: "view", visible: screenVisible.current && foreground.current });
+    };
+    syncForeground();
+    const subscription = AppState.addEventListener("change", syncForeground);
+    if (Platform.OS === "web") document.addEventListener("visibilitychange", syncForeground);
+    return () => {
+      subscription.remove();
+      if (Platform.OS === "web") document.removeEventListener("visibilitychange", syncForeground);
+    };
+  }, [dispatch]);
+
+  const bootClient = useCallback((nextSettings: AppSettings) => {
+    disposeRef.current?.();
+    dispatch({ type: "connection", state: "disconnected" });
+    const scope = nextSettings.useMockChannel ? "mock" : JSON.stringify([nextSettings.zakuraBaseUrl, nextSettings.authToken]);
+    // A different server/token must never inherit another channel's roster or drafts.
+    if (scope !== scopeRef.current) {
+      const messages = nextSettings.useMockChannel ? demoTranscript() : {};
+      const agents = nextSettings.useMockChannel ? DEMO_AGENTS.map((agent) => ({ ...agent,
+        preview: previewFromMessages(messages[agent.id] ?? []) ?? agent.preview })) : [];
+      dispatch({ type: "reset", agents, messages });
+      scopeRef.current = scope;
+    }
+    const client = createChannelClient(nextSettings);
     clientRef.current = client;
     setTransportLabel(client.label);
-    const unsub = client.subscribe((e) => handleEventRef.current(e));
-    try {
-      await client.connect();
-    } catch (err) {
-      setConnection("error");
-      setConnectionDetail(err instanceof Error ? err.message : String(err));
-    }
-    return () => {
-      unsub();
-      if (clientRef.current === client) {
-        client.disconnect();
-        clientRef.current = null;
-      }
+    const unsubscribe = client.subscribe((event) => {
+      if (clientRef.current === client) dispatch(event);
+    });
+    disposeRef.current = () => {
+      unsubscribe();
+      // Detach before disconnecting; no old client can mutate the new store.
+      if (clientRef.current === client) clientRef.current = null;
+      client.disconnect();
     };
-  }, []);
+    void client.connect().catch((error: unknown) => {
+      if (clientRef.current === client) dispatch({ type: "connection", state: "error",
+        detail: error instanceof Error ? error.message : "Could not connect to the channel." });
+    });
+  }, [dispatch]);
 
-  // Load settings once, then connect. Reconnects when transport settings change.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const loaded = await loadSettings();
+    void loadSettings().then((loaded) => {
       if (cancelled) return;
+      settingsRef.current = loaded;
       setSettings(loaded);
       setSettingsReady(true);
-    })();
-    return () => {
-      cancelled = true;
-    };
+    });
+    return () => { cancelled = true; };
   }, []);
 
-  const transportKey = `${settings.useMockChannel}|${settings.zakuraBaseUrl}|${settings.authToken}`;
   useEffect(() => {
     if (!settingsReady) return;
-    let dispose: (() => void) | undefined;
-    let cancelled = false;
-    void bootClient(settings).then((d) => {
-      if (cancelled) d();
-      else dispose = d;
-    });
-    return () => {
-      cancelled = true;
-      dispose?.();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settingsReady, transportKey, bootClient]);
+    bootClient(settings);
+    return () => { disposeRef.current?.(); disposeRef.current = null; };
+  }, [settingsReady, settings, bootClient]);
 
-  const selectAgent = useCallback((id: string) => {
-    setSelectedId(id);
-    selectedRef.current = id;
-    setAgents((prev) => prev.map((a) => (a.id === id ? { ...a, unread: false } : a)));
-  }, []);
+  const selectAgent = useCallback((agentId: string) => dispatch({ type: "select", agentId }), [dispatch]);
+  const setDraft = useCallback((agentId: string, text: string) => {
+    if (stateRef.current.agents.some((agent) => agent.id === agentId)) dispatch({ type: "draft", agentId, text });
+  }, [dispatch]);
+  const clearDraft = useCallback((agentId: string, submitted: string) => {
+    if (stateRef.current.draftsByAgent[agentId] === submitted) dispatch({ type: "draft", agentId, text: "" });
+  }, [dispatch]);
 
-  const deliver = useCallback(
-    async (agentId: string, text: string, messageId: string): Promise<boolean> => {
-      const client = clientRef.current;
-      const optimistic: ChatMessage = {
-        id: messageId,
-        agentId,
-        role: "user",
-        kind: "text",
-        text,
-        createdAt: Date.now(),
-      };
-      // Optimistic insert so the bubble appears instantly; the channel echoes the same id.
-      upsertMessage(optimistic);
-      try {
-        if (!client) throw new Error("Channel not initialised");
-        await client.sendMessage({ agentId, text, clientMessageId: messageId });
-        return true;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        upsertMessage({ ...optimistic, failed: true });
-        setLastError({ id: uid("err"), message, agentId, at: Date.now() });
-        return false;
-      }
-    },
-    [upsertMessage],
-  );
+  const deliver = useCallback(async (agentId: string, text: string, messageId: string): Promise<boolean> => {
+    const current = stateRef.current;
+    const client = clientRef.current;
+    const agent = current.agents.find((item) => item.id === agentId);
+    const trimmed = text.trim();
+    if (!agent || !trimmed || trimmed.length > MAX_MESSAGE_LENGTH || current.typing[agentId]) return false;
+    if (agent.status === "offline" || client?.getConnectionState() !== "connected") {
+      dispatch({ type: "error", agentId, message: "This conversation is offline. Reconnect or choose an available agent." });
+      return false;
+    }
+    const previous = current.messagesByAgent[agentId]?.find((message) => message.id === messageId);
+    dispatch({ type: "optimistic", message: { id: messageId, agentId, role: "user", kind: "text", text: trimmed,
+      createdAt: previous?.createdAt ?? Date.now() } });
+    try {
+      await client.sendMessage({ agentId, text: trimmed, clientMessageId: messageId });
+      return clientRef.current === client;
+    } catch (error) {
+      if (clientRef.current === client) dispatch({ type: "error", agentId, clientMessageId: messageId,
+        message: error instanceof Error ? error.message : "Could not send the message." });
+      return false;
+    }
+  }, [dispatch]);
 
-  const send = useCallback(
-    async (text: string) => deliver(selectedRef.current, text, uid("user")),
-    [deliver],
-  );
+  const send = useCallback((text: string, agentId?: string) =>
+    deliver(agentId ?? stateRef.current.selectedId, text, uid("user")), [deliver]);
 
-  const retryMessage = useCallback(
-    async (messageId: string) => {
-      const agentId = selectedRef.current;
-      const msg = (messagesByAgent[agentId] ?? []).find((m) => m.id === messageId);
-      if (!msg || !msg.text) return false;
-      // Drop the failed bubble; deliver() re-inserts it with a fresh timestamp.
-      setMessagesByAgent((prev) => ({
-        ...prev,
-        [agentId]: (prev[agentId] ?? []).filter((m) => m.id !== messageId),
-      }));
-      return deliver(agentId, msg.text, messageId);
-    },
-    [deliver, messagesByAgent],
-  );
+  const retryMessage = useCallback(async (messageId: string) => {
+    const agentId = stateRef.current.selectedId;
+    const message = stateRef.current.messagesByAgent[agentId]?.find((item) => item.id === messageId);
+    if (!message?.failed || message.role !== "user" || !message.text) return false;
+    const ok = await deliver(agentId, message.text, messageId);
+    if (ok) clearDraft(agentId, message.text);
+    return ok;
+  }, [deliver, clearDraft]);
 
   const interrupt = useCallback(async () => {
-    await clientRef.current?.interrupt?.(selectedRef.current);
-  }, []);
+    const agentId = stateRef.current.selectedId;
+    try {
+      const client = clientRef.current;
+      if (!client?.interrupt) throw new Error("This channel cannot stop a reply.");
+      await client.interrupt(agentId);
+    } catch (error) {
+      dispatch({ type: "error", agentId, message: error instanceof Error ? error.message : "Could not stop the reply." });
+    }
+  }, [dispatch]);
 
-  const reconnect = useCallback(async () => {
-    setLastError(null);
-    await bootClient(settings);
-  }, [bootClient, settings]);
+  const reconnect = useCallback(async () => bootClient(settingsRef.current), [bootClient]);
+  const lastError = [...state.errors].reverse().find((error) => !error.agentId || error.agentId === state.selectedId) ?? null;
+  const dismissError = useCallback(() => {
+    const error = [...stateRef.current.errors].reverse().find((item) => !item.agentId || item.agentId === stateRef.current.selectedId);
+    if (error) dispatch({ type: "dismiss_error", error });
+  }, [dispatch]);
 
-  const dismissError = useCallback(() => setLastError(null), []);
-
-  const updateSettings = useCallback(async (patch: Partial<AppSettings>) => {
-    let next: AppSettings | undefined;
-    setSettings((prev) => {
-      next = { ...prev, ...patch };
-      return next;
+  const updateSettings = useCallback((patch: Partial<AppSettings>): Promise<void> => {
+    const pending = saveQueue.current.catch(() => undefined).then(async () => {
+      const next = { ...settingsRef.current, ...patch };
+      next.zakuraBaseUrl = next.zakuraBaseUrl.trim();
+      next.authToken = next.authToken.trim();
+      if (!next.useMockChannel) {
+        const problem = validateLiveSettings({ baseUrl: next.zakuraBaseUrl, token: next.authToken });
+        if (problem) throw new Error(problem);
+      }
+      await saveSettings(next);
+      if (JSON.stringify(next) !== JSON.stringify(settingsRef.current)) {
+        settingsRef.current = next;
+        setSettings(next);
+      }
     });
-    // setState updater runs synchronously in React 19 event handlers; persist after.
-    await Promise.resolve();
-    if (next) await saveSettings(next);
+    saveQueue.current = pending;
+    return pending;
   }, []);
 
-  const value = useMemo<StoreValue>(
-    () => ({
-      agents,
-      selectedId,
-      messagesByAgent,
-      typing,
-      settings,
-      settingsReady,
-      connection,
-      connectionDetail,
-      transportLabel,
-      lastError,
-      sidebarOpen,
-      selectAgent,
-      send,
-      retryMessage,
-      interrupt,
-      reconnect,
-      dismissError,
-      updateSettings,
-      setSidebarOpen,
-    }),
-    [
-      agents,
-      selectedId,
-      messagesByAgent,
-      typing,
-      settings,
-      settingsReady,
-      connection,
-      connectionDetail,
-      transportLabel,
-      lastError,
-      sidebarOpen,
-      selectAgent,
-      send,
-      retryMessage,
-      interrupt,
-      reconnect,
-      dismissError,
-      updateSettings,
-    ],
-  );
+  const value = useMemo<StoreValue>(() => ({
+    agents: state.agents, selectedId: state.selectedId, messagesByAgent: state.messagesByAgent,
+    draftsByAgent: state.draftsByAgent, typing: state.typing, connection: state.connection,
+    connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
+    sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, interrupt, reconnect,
+    dismissError, updateSettings, setSidebarOpen, setThreadVisible,
+  }), [state, settings, settingsReady, transportLabel, lastError, sidebarOpen, selectAgent, setDraft,
+    clearDraft, send, retryMessage, interrupt, reconnect, dismissError, updateSettings, setThreadVisible]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 
 export function useStore(): StoreValue {
-  const ctx = useContext(StoreContext);
-  if (!ctx) throw new Error("useStore must be used within StoreProvider");
-  return ctx;
+  const context = useContext(StoreContext);
+  if (!context) throw new Error("useStore must be used within StoreProvider");
+  return context;
 }
 
 export function formatTime(ts: number): string {
-  try {
-    return new Date(ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "";
-  }
+  return new Date(ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-/** "Today", "Yesterday", or a short date for thread separators. */
 export function formatDay(ts: number): string {
-  const d = new Date(ts);
+  const date = new Date(ts);
   const now = new Date();
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  const startOf = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const diffDays = Math.round((startOf(now) - startOf(date)) / 86_400_000);
   if (diffDays === 0) return "Today";
   if (diffDays === 1) return "Yesterday";
-  try {
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  } catch {
-    return "";
-  }
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric",
+    ...(date.getFullYear() !== now.getFullYear() ? { year: "numeric" as const } : {}) });
 }

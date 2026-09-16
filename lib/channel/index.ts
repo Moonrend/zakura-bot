@@ -5,7 +5,7 @@ export type {
   SendMessageInput,
   ZakuraChannelClient,
 } from "./types";
-export { uid } from "./types";
+export { uid, MAX_MESSAGE_LENGTH } from "./types";
 export { MockZakuraChannelClient, createDemoMessages } from "./mock-client";
 export {
   LiveZakuraChannelClient,

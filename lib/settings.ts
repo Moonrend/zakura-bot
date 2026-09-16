@@ -7,17 +7,17 @@ export async function loadSettings(): Promise<AppSettings> {
   try {
     const raw = await AsyncStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
-    const parsed = JSON.parse(raw) as Partial<AppSettings>;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ...DEFAULT_SETTINGS };
+    const value = parsed as Record<string, unknown>;
     return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
       zakuraBaseUrl:
-        typeof parsed.zakuraBaseUrl === "string" && parsed.zakuraBaseUrl.trim()
-          ? parsed.zakuraBaseUrl.trim()
+        typeof value.zakuraBaseUrl === "string" && value.zakuraBaseUrl.trim()
+          ? value.zakuraBaseUrl.trim()
           : DEFAULT_SETTINGS.zakuraBaseUrl,
-      authToken: typeof parsed.authToken === "string" ? parsed.authToken : "",
+      authToken: typeof value.authToken === "string" ? value.authToken.trim() : "",
       // Never treat a missing mock flag as live
-      useMockChannel: parsed.useMockChannel ?? true,
+      useMockChannel: typeof value.useMockChannel === "boolean" ? value.useMockChannel : true,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -25,9 +25,6 @@ export async function loadSettings(): Promise<AppSettings> {
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
-  try {
-    await AsyncStorage.setItem(KEY, JSON.stringify(settings));
-  } catch (err) {
-    console.warn("[zakura-bot] failed to persist settings", err);
-  }
+  // Propagate failures so Settings never reports a save that did not persist.
+  await AsyncStorage.setItem(KEY, JSON.stringify(settings));
 }

@@ -12,6 +12,9 @@ export function BlobAvatar({ color, name, size = 40 }: Props) {
   const initial = (name.trim()[0] ?? "?").toUpperCase();
   return (
     <View
+      accessible={false}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
       className={cn("items-center justify-center rounded-full")}
       style={{
         width: size,

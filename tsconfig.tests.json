@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true
+  },
+  "include": ["tests/**/*.ts", "lib/**/*.ts", "playwright.config.ts", "scripts/**/*.mjs"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,4 +1,6 @@
-import { View, useWindowDimensions, Pressable } from "react-native";
+import { useCallback } from "react";
+import { ActivityIndicator, Modal, View, useWindowDimensions, Pressable } from "react-native";
+import { useFocusEffect } from "expo-router";
 import { AgentSidebar } from "@/components/AgentSidebar";
 import { ChatPane } from "@/components/ChatPane";
 import { useStore } from "@/lib/store";
@@ -6,29 +8,40 @@ import { useStore } from "@/lib/store";
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 768;
-  const { sidebarOpen, setSidebarOpen } = useStore();
+  const { sidebarOpen, setSidebarOpen, settingsReady, setThreadVisible } = useStore();
 
-  const showSidebar = !compact || sidebarOpen;
+  useFocusEffect(useCallback(() => {
+    setThreadVisible(!compact || !sidebarOpen);
+    return () => setThreadVisible(false);
+  }, [compact, sidebarOpen, setThreadVisible]));
+
+  if (!settingsReady) {
+    return <View className="flex-1 items-center justify-center bg-app" accessibilityLabel="Loading Zakura Bot">
+      <ActivityIndicator color="#a8a8a8" />
+    </View>;
+  }
 
   return (
     <View className="flex-1 flex-row bg-app">
-      {showSidebar ? (
-        <View
-          className={compact ? "absolute bottom-0 left-0 top-0 z-20 w-[86%] max-w-sm" : "w-80"}
-          style={compact ? { elevation: 8 } : undefined}
-        >
+      {!compact ? (
+        <View className="w-80 shrink-0">
           <AgentSidebar />
         </View>
       ) : null}
-      {compact && sidebarOpen ? (
-        <Pressable
-          className="absolute inset-0 z-10 bg-black/50"
-          onPress={() => setSidebarOpen(false)}
-        />
-      ) : null}
-      <View className="flex-1">
+      <View className="min-w-0 flex-1" accessibilityElementsHidden={compact && sidebarOpen}
+        importantForAccessibility={compact && sidebarOpen ? "no-hide-descendants" : "auto"}>
         <ChatPane />
       </View>
+      <Modal transparent visible={compact && sidebarOpen} animationType="none"
+        onRequestClose={() => setSidebarOpen(false)} statusBarTranslucent>
+        <View className="flex-1" accessibilityViewIsModal>
+          <Pressable className="absolute inset-0 bg-black/60" onPress={() => setSidebarOpen(false)}
+            accessible={false} focusable={false} />
+          <View className="h-full" style={{ width: Math.min(320, Math.max(240, width - 48)) }}>
+            <AgentSidebar />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

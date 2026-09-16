@@ -11,6 +11,32 @@ export interface ToolActivity {
   /** undefined = running, true = ok, false = failed */
   ok?: boolean;
   detail?: string;
+  /** Cancelled work is distinct from a failed tool call. */
+  interrupted?: boolean;
+}
+
+export interface MessageLink {
+  label: string;
+  url: string;
+  style?: "primary" | "danger" | "default";
+}
+
+export interface MessageAttachment {
+  /** Resolved by the platform adapter; workspace paths never reach the client. */
+  url: string;
+  name?: string;
+  type?: "image" | "file" | "audio" | "video";
+}
+
+export interface MessageCard {
+  title?: string;
+  subtitle?: string;
+  text?: string;
+  imageUrl?: string;
+  fields?: { label: string; value: string }[];
+  table?: { headers: string[]; rows: string[][] };
+  images?: { url: string; alt?: string }[];
+  links?: MessageLink[];
 }
 
 export interface ChatMessage {
@@ -19,8 +45,18 @@ export interface ChatMessage {
   role: MessageRole;
   kind: MessageKind;
   text?: string;
+  format?: "markdown" | "raw";
+  replyTo?: string;
+  attachments?: MessageAttachment[];
+  actions?: MessageLink[];
+  card?: MessageCard;
   tool?: ToolActivity;
   createdAt: number;
+  /** User echo correlation, even if the server assigns a different id. */
+  clientMessageId?: string;
+  serverId?: string;
+  /** Socket writes are pending until the server echoes the user message. */
+  pending?: boolean;
   /** true while assistant tokens are still streaming in */
   streaming?: boolean;
   /** Set when the turn was interrupted before completion */
