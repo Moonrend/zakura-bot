@@ -1,9 +1,10 @@
 /**
- * ZakuraChannelClient — transport contract for the future `zakurabot` platform.
+ * ZakuraChannelClient — transport contract for the `zakurabot` platform.
  *
- * Phase 1 ships a mock implementation. A later PR in Moonrend/Zakura will add a
- * Chat-SDK–style platform adapter; this client will then speak WS or SSE and
- * surface outbound `chat_reply` events as assistant bubbles / attachments.
+ * Phase 1 ships a mock implementation plus a live WebSocket client whose wire
+ * format is documented in docs/architecture.md. The server-side platform
+ * adapter lands separately in Moonrend/Zakura; until then the live client
+ * connects, fails, and reports a clear error state.
  */
 
 import type { ChatMessage } from "../types";
@@ -14,10 +15,10 @@ export type ChannelEvent =
   | { type: "connection"; state: ChannelConnectionState; detail?: string }
   | { type: "message"; message: ChatMessage }
   | { type: "message_delta"; agentId: string; messageId: string; delta: string }
-  | { type: "message_done"; agentId: string; messageId: string }
+  | { type: "message_done"; agentId: string; messageId: string; interrupted?: boolean }
   | { type: "tool_activity"; agentId: string; message: ChatMessage }
   | { type: "typing"; agentId: string; active: boolean }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; agentId?: string };
 
 export type ChannelListener = (event: ChannelEvent) => void;
 
@@ -29,14 +30,42 @@ export interface SendMessageInput {
 }
 
 export interface ZakuraChannelClient {
-  /** Connect to Zakura (WS/SSE). Mock resolves immediately. */
+  /** Human-readable transport label shown in the UI ("Mock", "Live WS"). */
+  readonly label: string;
+  /** Connect to Zakura (WS/SSE). Mock resolves after a short delay. */
   connect(): Promise<void>;
   disconnect(): void;
   getConnectionState(): ChannelConnectionState;
   /** Subscribe to channel events; returns unsubscribe. */
   subscribe(listener: ChannelListener): () => void;
-  /** Send a user message into the agent thread. */
+  /**
+   * Send a user message into the agent thread.
+   * Rejects (throws) when the channel is not connected so the UI can keep
+   * the draft and mark the message as failed.
+   */
   sendMessage(input: SendMessageInput): Promise<void>;
   /** Optional interrupt for the current turn. */
   interrupt?(agentId: string): Promise<void>;
+}
+
+/** Shared helpers for client implementations. */
+export function uid(prefix = "msg"): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export class ChannelEmitter {
+  private listeners = new Set<ChannelListener>();
+
+  subscribe(listener: ChannelListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  emit(...events: ChannelEvent[]): void {
+    for (const event of events) {
+      for (const l of Array.from(this.listeners)) l(event);
+    }
+  }
 }

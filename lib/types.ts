@@ -23,6 +23,10 @@ export interface ChatMessage {
   createdAt: number;
   /** true while assistant tokens are still streaming in */
   streaming?: boolean;
+  /** Set when the turn was interrupted before completion */
+  interrupted?: boolean;
+  /** Set on user messages that the channel refused (e.g. offline) */
+  failed?: boolean;
 }
 
 export interface Agent {
@@ -34,6 +38,8 @@ export interface Agent {
   unread: boolean;
   preview?: string;
 }
+
+export type ChannelMode = "mock" | "live";
 
 export interface AppSettings {
   zakuraBaseUrl: string;

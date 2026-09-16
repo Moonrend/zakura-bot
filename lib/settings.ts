@@ -11,7 +11,12 @@ export async function loadSettings(): Promise<AppSettings> {
     return {
       ...DEFAULT_SETTINGS,
       ...parsed,
-      // Never treat missing mock flag as live
+      zakuraBaseUrl:
+        typeof parsed.zakuraBaseUrl === "string" && parsed.zakuraBaseUrl.trim()
+          ? parsed.zakuraBaseUrl.trim()
+          : DEFAULT_SETTINGS.zakuraBaseUrl,
+      authToken: typeof parsed.authToken === "string" ? parsed.authToken : "",
+      // Never treat a missing mock flag as live
       useMockChannel: parsed.useMockChannel ?? true,
     };
   } catch {
@@ -20,5 +25,9 @@ export async function loadSettings(): Promise<AppSettings> {
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
-  await AsyncStorage.setItem(KEY, JSON.stringify(settings));
+  try {
+    await AsyncStorage.setItem(KEY, JSON.stringify(settings));
+  } catch (err) {
+    console.warn("[zakura-bot] failed to persist settings", err);
+  }
 }
