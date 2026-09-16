@@ -1,10 +1,12 @@
 name: Android APK
 
 # Local Gradle APK — no Expo cloud / EXPO_TOKEN required.
-# Prefer manual + version tags to save Actions minutes.
+# Runs on main pushes (packaging), manual dispatch, and version tags.
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -27,8 +29,12 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # Do NOT install obsolete SDK package "tools" (fails: Failed to find package 'tools').
+      # Expo 57 / RN 0.86 defaults: compileSdk 36, build-tools 36.0.0, NDK 27.1.12297006.
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools cmdline-tools;latest build-tools;36.0.0 platforms;android-36 ndk;27.1.12297006 cmake;3.22.1
 
       - name: Install dependencies
         run: npm ci

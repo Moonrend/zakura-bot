@@ -86,7 +86,7 @@ This only produces a **static web** bundle. It is **not** an Android APK / iOS I
 | Workflow | What it produces | Trigger | Cloud / secrets |
 | --- | --- | --- | --- |
 | **`EAS Build`** (`.github/workflows/eas-build.yml`) | Expo cloud builds: Android APK (preview) / store AAB+IPA (production) | `workflow_dispatch` (platform + profile) **or** push tag `v*` | Requires **`EXPO_TOKEN`** |
-| **`Android APK`** (`.github/workflows/android-apk.yml`) | Local Gradle APK artifact **`zakura-bot-android-apk`** | `workflow_dispatch` **or** push tag `v*` | **No** Expo cloud; optional keystore secrets for release signing |
+| **`Android APK`** (`.github/workflows/android-apk.yml`) | Local Gradle APK artifact **`zakura-bot-android-apk`** | push to **`main`**, `workflow_dispatch`, or tag `v*` | **No** Expo cloud; optional keystore secrets for release signing |
 
 **Trigger EAS (cloud):**
 
@@ -103,7 +103,7 @@ Profiles in `eas.json`:
 
 **Trigger Android APK (no Expo cloud):**
 
-1. Actions → **Android APK** → Run workflow (or push a `v*` tag).
+1. Push to **`main`**, or Actions → **Android APK** → Run workflow, or push a `v*` tag.
 2. Download artifact **`zakura-bot-android-apk`**.
 3. Without keystore secrets the job builds a **debug-signed** APK (fine for internal sideload).
 4. For release signing later, add: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, and wire `signingConfigs.release` in `android/app/build.gradle` to the `MYAPP_UPLOAD_*` gradle properties the workflow writes.
@@ -184,7 +184,7 @@ npm run typecheck && npm test
 | --- | --- | --- | --- |
 | **Web CI** `ci.yml` | 静态站点工件 `zakura-bot-web` | `main` push / PR | 无 |
 | **EAS Build** `eas-build.yml` | Expo 云构建（preview APK / production 商店包） | 手动 `workflow_dispatch` 或推送 `v*` tag | 必填 **`EXPO_TOKEN`** |
-| **Android APK** `android-apk.yml` | 本地 Gradle APK 工件 `zakura-bot-android-apk` | 手动或 `v*` tag | 无需 Expo；发版签名可后续加 keystore secrets |
+| **Android APK** `android-apk.yml` | 本地 Gradle APK 工件 `zakura-bot-android-apk` | push `main` / 手动 / `v*` tag | 无需 Expo；发版签名可后续加 keystore secrets |
 
 **跑 EAS：** 在仓库 Secrets 添加 `EXPO_TOKEN` → Actions → **EAS Build** → 选 platform / profile；或本地 `npm run eas:build:android`。首次需 `eas init` 写入 projectId。
 
