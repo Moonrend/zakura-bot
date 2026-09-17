@@ -164,7 +164,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "dismiss_error":
       return { ...state, errors: state.errors.filter((error) => error !== action.error) };
     case "connection": {
-      if (action.state === "connected") return { ...state, connection: action.state, connectionDetail: action.detail };
+      if (action.state === "connected") return { ...state, connection: action.state, connectionDetail: action.detail,
+        // A fresh authenticated connection resolves channel diagnostics, such
+        // as the gateway's temporary error before a 1011 close. It cannot
+        // confirm a failed send or recover an agent's failed run.
+        errors: state.connection === "connected" ? state.errors : state.errors.filter((error) => error.agentId !== undefined) };
       const messagesByAgent = Object.fromEntries(Object.entries(state.messagesByAgent).map(([id, messages]) => [id, settle(messages, true)]));
       return { ...state, connection: action.state, connectionDetail: action.detail, typing: {}, interrupting: {}, messagesByAgent,
         agents: state.agents.map((agent) => ({ ...agent, status: agent.status === "busy" ? "idle" : agent.status,

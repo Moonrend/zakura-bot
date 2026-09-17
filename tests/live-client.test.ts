@@ -5,6 +5,49 @@ import { decodeServerFrame } from "../lib/channel/protocol";
 import { chatReducer, emptyChatState, isAgentWorking } from "../lib/chat-state";
 import { agents, liveHarness, networkHarness } from "./helpers";
 
+test("authenticated reconnect clears channel diagnostics but retains conversation failures and drafts", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const recovery of ["automatic", "manual"] as const) {
+    const { client, sockets } = liveHarness();
+    let state = emptyChatState();
+    client.subscribe((event) => { state = chatReducer(state, event); });
+    t.after(() => client.disconnect());
+    await client.connect(); const first = sockets[0]; first.open(); first.ready();
+    const user = { id: "pending", agentId: "a", role: "user" as const, kind: "text" as const,
+      text: "Retry this request", createdAt: 1 };
+    state = chatReducer(state, { type: "optimistic", message: user });
+    await client.sendMessage({ agentId: "a", clientMessageId: user.id, text: user.text, localCreatedAt: user.createdAt });
+    first.frame({ type: "error", agentId: "a", clientMessageId: user.id, message: "Delivery rejected" });
+    first.frame({ type: "error", agentId: "b", turnEnded: true, message: "Research run failed" });
+    state = chatReducer(state, { type: "draft", agentId: "a", text: "Keep the next draft" });
+    // The reference gateway sends a nonfatal error before a transient 1011 close.
+    first.frame({ type: "error", fatal: false, message: "Zakura Bot is temporarily unavailable" });
+    const failures = state.errors;
+    first.remoteClose(1011);
+    if (recovery === "manual") { client.disconnect(); await client.connect(); }
+    else t.mock.timers.tick(1000);
+    const second = sockets[1]; second.open();
+    assert.equal(state.connection, "connecting");
+    assert.deepEqual(state.errors, failures, "a new attempt alone does not resolve a channel failure");
+    second.ready();
+    assert.equal(state.connection, "connected");
+    assert.deepEqual(state.errors.map((error) => error.message), ["Delivery rejected", "Research run failed"], recovery);
+    assert.equal(state.messagesByAgent.a[0].failed, true, "reconnection cannot confirm delivery");
+    assert.equal(state.draftsByAgent.a, "Keep the next draft");
+    assert.equal(second.sent.some((frame) => frame.type === "send"), false);
+
+    second.frame({ type: "message", message: { ...user, clientMessageId: user.id } });
+    assert.deepEqual(state.errors.map((error) => error.message), ["Research run failed"]);
+    assert.equal(state.messagesByAgent.a[0].failed, false);
+    second.raw("invalid JSON");
+    second.frame({ type: "agents", agents });
+    second.ready();
+    assert.deepEqual(state.errors.map((error) => error.message), ["Research run failed", "Malformed JSON from Zakura."],
+      "new diagnostics survive roster refreshes and duplicate ready frames on the recovered socket");
+    client.disconnect();
+  }
+});
+
 test("a stale Stop cannot reopen a turn after an idle or terminal channel update", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   for (const terminal of [

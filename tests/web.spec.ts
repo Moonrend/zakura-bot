@@ -16,6 +16,60 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("successful reconnect removes stale channel warnings while failed sends remain retryable", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  let connections = 0;
+  const sends: { clientMessageId: string; text: string }[] = [];
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    connections += 1;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }, { id: "research", name: "Research", status: "idle" }] }));
+      if (frame.type === "send") {
+        sends.push(frame);
+        socket.send(JSON.stringify(sends.length === 1
+          ? { type: "error", agentId: "live", clientMessageId: frame.clientMessageId, message: "Delivery rejected; retry this message" }
+          : { type: "message", message: { id: frame.clientMessageId, clientMessageId: frame.clientMessageId,
+            agentId: "live", role: "user", kind: "text", text: frame.text, createdAt: 1 } }));
+      }
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false,
+  })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Retry this request");
+  await input.press("Enter");
+  const retry = page.getByRole("button", { name: "Retry failed message", exact: true });
+  await expect(retry).toBeEnabled();
+  await input.fill("Keep the next draft");
+  channel!.send(JSON.stringify({ type: "error", agentId: "research", turnEnded: true, message: "Research run failed" }));
+  const unavailable = "Zakura Bot is temporarily unavailable";
+  channel!.send(JSON.stringify({ type: "error", message: unavailable, fatal: false }));
+  await expect(page.getByText(unavailable, { exact: true })).toBeVisible();
+  channel!.close({ code: 1011, reason: "temporary service failure" });
+  await expect.poll(() => connections).toBe(2);
+  await expect(page.getByText("Live WS channel · connected", { exact: true })).toBeVisible();
+  await expect(page.getByText(unavailable, { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Delivery rejected; retry this message", { exact: true })).toBeVisible();
+  await expect(retry).toBeEnabled();
+  await expect(input).toHaveValue("Keep the next draft");
+  await expect(input).toBeFocused();
+  expect(sends).toHaveLength(1);
+
+  await retry.click();
+  await expect(retry).toHaveCount(0);
+  expect(sends).toHaveLength(2);
+  expect(sends[1]).toEqual(sends[0]);
+  await expect(page.getByRole("region", { name: "Channel status details", exact: true })).toHaveCount(0);
+  await expect(input).toHaveValue("Keep the next draft");
+  await agent(page, "Research").click();
+  await expect(page.getByText("Research run failed", { exact: true })).toBeVisible();
+});
+
 test("mobile keyboard resizing keeps the composer inside the visible viewport and restores its draft layout", async ({ page }) => {
   await mockReady(page);
   await page.setViewportSize({ width: 390, height: 844 });
