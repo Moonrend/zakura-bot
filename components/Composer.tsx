@@ -25,6 +25,14 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   const sending = useRef(false);
   const filePastePending = useRef(false);
   const inputRef = useRef<TextInput>(null);
+  const actionRef = useRef<View | null>(null);
+  const setActionRef = useCallback((node: View | null) => {
+    // Changing Send/Stop removes the old control, including any held press.
+    // Move its keyboard focus to the draft before that DOM node disappears.
+    if (!node && Platform.OS === "web" && actionRef.current &&
+      document.activeElement === (actionRef.current as unknown as HTMLElement)) inputRef.current?.focus();
+    actionRef.current = node;
+  }, []);
   const offline = connection !== "connected" || agentOffline;
   const stopping = !!interrupting[selectedId];
   const sendingMessage = submitting || deliveryPending;
@@ -157,14 +165,14 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
           }}
         />
         {busy ? (
-          <Pressable onPress={() => void interrupt()} disabled={offline || stopping}
+          <Pressable key="stop" ref={setActionRef} onPress={() => void interrupt()} disabled={offline || stopping}
             className="h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink active:opacity-80"
             accessibilityRole="button" accessibilityLabel={stopping ? "Stopping reply" : "Stop generating"}
             aria-busy={stopping} accessibilityState={{ disabled: offline || stopping, busy: stopping }}>
             {stopping ? <ActivityIndicator size="small" color="#070707" /> : <Square size={14} color="#070707" fill="#070707" />}
           </Pressable>
         ) : (
-          <Pressable onPress={() => void submit()} disabled={!canSend}
+          <Pressable key="send" ref={setActionRef} onPress={() => void submit()} disabled={!canSend}
             className={cn("h-11 w-11 shrink-0 items-center justify-center rounded-full", canSend ? "bg-accent active:opacity-80" : "bg-raised-hover")}
             accessibilityRole="button" accessibilityLabel="Send message" aria-busy={sendingMessage} accessibilityState={{ disabled: !canSend, busy: sendingMessage }}>
             {sendingMessage ? <ActivityIndicator size="small" color="#a3a3a3" /> : <ArrowUp size={20} color={canSend ? "#fcfcfc" : "#a3a3a3"} />}

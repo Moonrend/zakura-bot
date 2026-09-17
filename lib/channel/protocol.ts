@@ -1,6 +1,6 @@
 /** Zakurabot v1 wire contract plus optional streaming/turn-ended extensions. */
 import type { Agent, ChatMessage, MessageAttachment, MessageCard, MessageLink } from "../types";
-import type { ChannelEvent } from "./types";
+import { MAX_MESSAGE_LENGTH, type ChannelEvent } from "./types";
 
 export const PROTOCOL_VERSION = 1;
 const MAX_FRAME_BYTES = 1_000_000;
@@ -203,6 +203,7 @@ export function decodeServerFrame(raw: string): ServerFrame | null {
       // Ordinary assistant/runtime events are not a source of visible replies.
       requireValid((m.role === "user" && m.kind === "text") || (m.role === "system" && m.kind === "system"));
       requireValid(typeof m.text === "string" && (m.clientMessageId === undefined || id(m.clientMessageId)));
+      requireValid(m.role !== "user" || (m.text.trim().length > 0 && m.text.length <= MAX_MESSAGE_LENGTH));
       return { type: "message", message: {
         id: m.id, agentId: m.agentId, role: m.role, kind: m.kind, text: m.text, createdAt: m.createdAt,
         clientMessageId: m.clientMessageId as string | undefined, pending: false, failed: false,

@@ -687,3 +687,60 @@ test("raw streaming replies retain a visible cursor and blank card decoration do
   await noOverflow(page);
   await accessible(page);
 });
+
+test("a held composer action cannot send a draft or stop a turn after the button changes", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  const operations: string[] = [];
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      if (frame.type === "send" || frame.type === "interrupt") operations.push(frame.type);
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep this next draft until I send it");
+
+  for (const gesture of ["keyboard", "pointer"] as const) {
+    channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: true }));
+    const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+    if (gesture === "keyboard") { await stop.focus(); await page.keyboard.down("Space"); }
+    else { await stop.hover(); await page.mouse.down(); }
+    channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: false }));
+    await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+    if (gesture === "keyboard") await page.keyboard.up("Space");
+    else await page.mouse.up();
+    await expect(input).toHaveValue("Keep this next draft until I send it");
+    await expect(input).toBeFocused();
+    expect(operations).toEqual([]);
+  }
+
+  await page.getByRole("button", { name: "Send message", exact: true }).focus();
+  await page.keyboard.down("Space");
+  channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: true }));
+  await expect(page.getByRole("button", { name: "Stop generating", exact: true })).toBeEnabled();
+  await page.keyboard.up("Space");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this next draft until I send it");
+  expect(operations).toEqual([]);
+});
+
+test("long search queries stay inside the narrow sidebar empty state", async ({ page }) => {
+  await mockReady(page);
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.getByRole("button", { name: "Open agent list", exact: true }).click();
+  const query = "unmatched".repeat(100);
+  await page.getByRole("textbox", { name: "Search agents", exact: true }).fill(query);
+  const empty = page.getByText(`No matches for “${query}”`, { exact: true });
+  await expect(empty).toBeVisible();
+  await expect.poll(() => empty.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const bounds = await empty.boundingBox();
+  expect(bounds!.width).toBeLessThan(272);
+  expect(bounds!.height).toBeLessThan(80);
+  await page.getByRole("button", { name: "Clear search", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Search agents", exact: true })).toBeFocused();
+  await noOverflow(page);
+});

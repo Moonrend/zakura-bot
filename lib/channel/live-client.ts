@@ -63,7 +63,9 @@ function parseBaseUrl(baseUrl: string): URL {
   if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) {
     throw new Error("Base URL must start with http://, https://, ws:// or wss://.");
   }
-  if (url.username || url.password || url.search || url.hash) {
+  // URL.search/hash omit empty delimiters, but a trailing '#' still makes
+  // WebSocket reject the URL. Reject those configurations before retrying.
+  if (url.username || url.password || /[?#]/.test(url.href)) {
     throw new Error("Base URL must not include credentials, a query, or a fragment.");
   }
   return url;
@@ -95,6 +97,7 @@ type Timer = ReturnType<typeof setTimeout>;
 const key = (agentId: string, messageId: string) => JSON.stringify([agentId, messageId]);
 type PendingWrite = { agentId: string; text: string; timer: Timer };
 type SentMessage = { agentId: string; text: string; echo?: ChatMessage };
+type ReceiptAlias = { agentId: string; clientMessageId: string };
 type PendingInterrupt = { timer: Timer | null };
 
 export class LiveZakuraChannelClient implements ZakuraChannelClient {
@@ -118,6 +121,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   private acknowledgements = new Map<string, PendingWrite>();
   // Keep idempotency content through retries and reconnects, until access is removed.
   private sentMessages = new Map<string, SentMessage>();
+  private receiptAliases = new Map<string, ReceiptAlias>();
   // At most one outstanding stop request per agent.
   private interrupts = new Map<string, PendingInterrupt>();
   private network: ChannelNetworkStatus | undefined;
@@ -327,20 +331,11 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
         this.emitter.emit(frame);
         break;
       }
-      case "message":
-        if (frame.message.role === "user") {
-          const messageId = frame.message.clientMessageId ?? frame.message.id;
-          const messageKey = key(frame.message.agentId, messageId);
-          const sent = this.sentMessages.get(messageKey);
-          if (sent && sent.text !== frame.message.text) {
-            this.emitter.emit({ type: "error", message: "Zakura returned a message receipt with different text." });
-            return;
-          }
-          this.sentMessages.set(messageKey, { agentId: frame.message.agentId, text: frame.message.text!, echo: frame.message });
-          this.acknowledge(frame.message.agentId, messageId);
-        }
-        this.emitter.emit(frame);
+      case "message": {
+        const message = frame.message.role === "user" ? this.receiveReceipt(frame.message) : frame.message;
+        if (message) this.emitter.emit({ type: "message", message });
         break;
+      }
       case "typing":
         if (frame.active && this.roster.get(frame.agentId) === "offline") return;
         if (frame.active) this.liveTyping.add(frame.agentId);
@@ -382,6 +377,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     }
     for (const [messageKey, sent] of this.sentMessages) {
       if (!this.roster.has(sent.agentId)) this.sentMessages.delete(messageKey);
+    }
+    for (const [messageKey, alias] of this.receiptAliases) {
+      if (!this.roster.has(alias.agentId)) this.receiptAliases.delete(messageKey);
     }
     const confirmedStops: [string, PendingInterrupt][] = [];
     for (const [agentId, pending] of this.interrupts) {
@@ -434,6 +432,35 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     return true;
   }
 
+  private receiveReceipt(message: ChatMessage): ChatMessage | null {
+    const serverKey = key(message.agentId, message.id);
+    const alias = this.receiptAliases.get(serverKey);
+    // A replay may omit clientMessageId after the server id was already mapped.
+    // It must still validate and acknowledge the same original message.
+    const clientMessageId = message.clientMessageId ?? alias?.clientMessageId ?? message.id;
+    const messageKey = key(message.agentId, clientMessageId);
+    const sent = this.sentMessages.get(messageKey);
+    const idOwner = this.sentMessages.get(serverKey);
+    const clientAlias = this.receiptAliases.get(messageKey);
+    if ((alias && alias.clientMessageId !== clientMessageId) ||
+      (clientAlias && clientAlias.clientMessageId !== clientMessageId) ||
+      (idOwner && idOwner !== sent) || (sent?.echo && sent.echo.id !== message.id)) {
+      this.emitter.emit({ type: "error", agentId: message.agentId, turnEnded: false,
+        message: "Zakura returned a message receipt with conflicting ids." });
+      return null;
+    }
+    if (sent && sent.text !== message.text) {
+      this.emitter.emit({ type: "error", agentId: message.agentId, turnEnded: false,
+        message: "Zakura returned a message receipt with different text." });
+      return null;
+    }
+    const receipt = { ...message, clientMessageId };
+    this.sentMessages.set(messageKey, { agentId: message.agentId, text: message.text!, echo: receipt });
+    this.receiptAliases.set(serverKey, { agentId: message.agentId, clientMessageId });
+    this.acknowledge(message.agentId, clientMessageId);
+    return receipt;
+  }
+
   private sendFrame(frame: Record<string, unknown>): boolean {
     if (!this.socket || this.socket.readyState !== 1) return false;
     try { this.socket.send(JSON.stringify(frame)); return true; } catch { return false; }
@@ -481,6 +508,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     const clientMessageId = input.clientMessageId ?? uid("user");
     if (!isChannelId(clientMessageId)) throw new Error("Invalid message id.");
     const messageKey = key(input.agentId, clientMessageId);
+    const alias = this.receiptAliases.get(messageKey);
+    if (alias && alias.clientMessageId !== clientMessageId) throw new Error("This message id is already used by another receipt. Send a new message instead.");
     const sent = this.sentMessages.get(messageKey);
     if (sent && sent.text !== text) throw new Error("A message id cannot be reused for different text. Send a new message instead.");
     if (sent?.echo) {

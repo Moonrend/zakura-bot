@@ -61,6 +61,27 @@ test("server echoes and retries retain one user bubble even when the server rema
   assert.equal(state.errors.length, 0);
 });
 
+test("conflicting user snapshots cannot rewrite pending or delivered message bodies", () => {
+  let state = initial();
+  const user: ChatMessage = { id: "local", agentId: "a", role: "user", kind: "text", text: "Original body", createdAt: 10 };
+  const echo = { ...user, id: "server", clientMessageId: "local" };
+  state = chatReducer(state, { type: "optimistic", message: user });
+  state = chatReducer(state, { type: "message", message: { ...echo, text: "Different body" } });
+  assert.equal(state.messagesByAgent.a[0].text, user.text);
+  assert.equal(state.messagesByAgent.a[0].pending, true, "an invalid receipt is not delivery confirmation");
+  state = chatReducer(state, { type: "message", message: echo });
+  state = chatReducer(state, { type: "draft", agentId: "a", text: "Next draft" });
+  // A manual reconnect replaces the client's receipt cache, but keeps this transcript.
+  state = chatReducer(state, { type: "connection", state: "connecting" });
+  state = chatReducer(state, { type: "connection", state: "connected" });
+  state = chatReducer(state, { type: "message", message: { ...echo, clientMessageId: undefined, text: "Corrupt replay" } });
+  assert.equal(state.messagesByAgent.a.length, 1);
+  assert.equal(state.messagesByAgent.a[0].text, user.text);
+  assert.equal(state.messagesByAgent.a[0].pending, false);
+  assert.equal(state.messagesByAgent.a[0].serverId, "server");
+  assert.equal(state.draftsByAgent.a, "Next draft");
+});
+
 test("older tool updates neither replace the latest preview nor mark a conversation unread", () => {
   let state = initial();
   state = chatReducer(state, { type: "message", message: reply("r", "a", "Latest reply", 20) });

@@ -91,7 +91,7 @@ export function AgentSidebar() {
         {visible.length === 0 ? (
           <View className="items-center px-4 py-8" accessibilityLiveRegion="polite">
             {unreadOnly && !query ? <CheckCheck size={24} color="#b8b8b8" /> : <Search size={24} color="#b8b8b8" />}
-            <Text className="mt-3 text-center text-[14px] font-semibold text-ink">
+            <Text className="mt-3 w-full text-center text-[14px] font-semibold text-ink" numberOfLines={2}>
               {query.trim() ? `No matches for “${query.trim()}”` : agents.length === 0 ? "No agents connected" : "All caught up"}
             </Text>
             <Text className="mt-2 text-center text-[12px] leading-5 text-ink-secondary">

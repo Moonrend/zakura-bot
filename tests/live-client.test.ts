@@ -9,13 +9,24 @@ test("socket URLs preserve prefixes and reject credentials or unsupported protoc
   assert.equal(zakuraSocketUrl("ws://localhost:8787/api/zakurabot/ws/"), "ws://localhost:8787/api/zakurabot/ws");
   assert.equal(zakuraSocketUrl("http://localhost:8787"), "ws://localhost:8787/api/zakurabot/ws");
   assert.equal(zakuraSocketUrl("https://example.com/"), "wss://example.com/api/zakurabot/ws");
-  for (const baseUrl of ["file:///tmp", "https://user:pass@example.com", "https://example.com?token=secret", "https://example.com/#x", "invalid"]) {
+  for (const baseUrl of ["file:///tmp", "https://user:pass@example.com", "https://example.com?token=secret", "https://example.com/#x",
+    "https://example.com/#", "https://example.com/?", "invalid"]) {
     assert.throws(() => zakuraSocketUrl(baseUrl));
     assert.ok(validateLiveSettings({ baseUrl, token: "token" }));
   }
   assert.equal(validateLiveSettings({ baseUrl: "http://localhost", token: "x" }), null);
   assert.ok(validateLiveSettings({ baseUrl: "http://localhost", token: " " }));
   assert.ok(validateLiveSettings({ baseUrl: "http://localhost", token: "x".repeat(257) }));
+});
+
+test("user receipts respect the same nonempty text limit as inbound messages", () => {
+  const message = { id: "user", agentId: "a", role: "user", kind: "text", createdAt: 1 };
+  for (const text of ["", " \n\t ", "x".repeat(4001), "😀".repeat(2001)]) {
+    assert.throws(() => decodeServerFrame(JSON.stringify({ type: "message", message: { ...message, text } })));
+  }
+  for (const text of ["Hi", "文".repeat(4000), "😀".repeat(2000)]) {
+    assert.equal(decodeServerFrame(JSON.stringify({ type: "message", message: { ...message, text } }))?.type, "message");
+  }
 });
 
 test("chat_reply normalizes raw text, quotes, attachments, cards and links", () => {
@@ -616,4 +627,53 @@ test("idle rosters cannot confirm Stop over explicit live typing, streams or too
     assert.equal(events.some((event) => event.type === "error"), false, signal.type);
     client.disconnect();
   }
+});
+
+test("remapped receipt aliases retain their body and client id through reconnect replay", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  const input = { agentId: "a", clientMessageId: "local", text: "Original body" };
+  const message = { id: "server", clientMessageId: "local", agentId: "a", role: "user", kind: "text", text: input.text, createdAt: 1 };
+  await client.sendMessage(input);
+  sockets[0].frame({ type: "message", message });
+  sockets[0].remoteClose(1006);
+  t.mock.timers.tick(1000);
+  const socket = sockets[1]; socket.open(); socket.ready();
+
+  socket.frame({ type: "message", message: { ...message, clientMessageId: undefined, text: "Changed replay body" } });
+  assert.equal(events.filter((event) => event.type === "message").length, 1, "a server-id replay must not bypass receipt validation");
+  assert.match(JSON.stringify(events.at(-1)), /different text/);
+  socket.frame({ type: "message", message: { ...message, clientMessageId: undefined } });
+  const replay = events.at(-1);
+  assert.equal(replay?.type, "message");
+  if (replay?.type === "message") assert.equal(replay.message.clientMessageId, "local");
+  const count = events.length;
+  socket.frame({ type: "error", agentId: "a", clientMessageId: "local", message: "Late rejection" });
+  t.mock.timers.tick(100);
+  assert.equal(events.length, count);
+  await client.sendMessage(input);
+  assert.equal(socket.sent.some((frame) => frame.type === "send"), false, "a confirmed retry only reuses its original receipt");
+  assert.equal(client.getConnectionState(), "connected");
+});
+
+test("receipt ids cannot be reassigned and aliases are scoped to roster access", async (t) => {
+  const { client, sockets, events } = liveHarness();
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  const message = { id: "server", clientMessageId: "local", agentId: "a", role: "user", kind: "text", text: "Original", createdAt: 1 };
+  socket.frame({ type: "message", message });
+  for (const changed of [{ ...message, clientMessageId: "other" }, { ...message, id: "another-server-id" }]) {
+    socket.frame({ type: "message", message: changed });
+    assert.equal(events.filter((event) => event.type === "message").length, 1);
+    assert.match(JSON.stringify(events.at(-1)), /conflicting ids/);
+  }
+  await assert.rejects(client.sendMessage({ agentId: "a", clientMessageId: "server", text: "Original" }), /already used/);
+  socket.frame({ type: "message", message: { ...message, agentId: "b", text: "Other agent's message" } });
+  assert.equal(events.filter((event) => event.type === "message").length, 2, "message ids belong to a conversation");
+  socket.frame({ type: "agents", agents: [agents[1]] });
+  socket.frame({ type: "agents", agents });
+  socket.frame({ type: "message", message: { ...message, clientMessageId: "new-local", text: "New access" } });
+  assert.equal(events.filter((event) => event.type === "message").length, 3, "revocation drops the old receipt aliases");
 });

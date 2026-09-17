@@ -77,6 +77,9 @@ function putMessage(state: ChatState, incoming: ChatMessage): ChatState {
     list.find((message) => message.id === incoming.id || message.serverId === incoming.id);
   // Message ids identify one role and content kind for the lifetime of a thread.
   if (previous && (previous.role !== incoming.role || previous.kind !== incoming.kind)) return state;
+  // User messages are immutable, including history from a replacement client
+  // whose in-memory receipt aliases have not yet been restored.
+  if (previous?.role === "user" && previous.text !== incoming.text) return state;
   // A replayed start must not resurrect a completed or disconnected tool chip.
   if (previous?.tool && !activeOutput(previous) && activeOutput(incoming)) return state;
   const stableId = previous?.id ?? incomingId;
