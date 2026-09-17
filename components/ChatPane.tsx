@@ -18,6 +18,7 @@ export function ChatPane() {
   const agent = agents.find((item) => item.id === selectedId);
   const messages = messagesByAgent[selectedId] ?? [];
   const busy = !!typing[selectedId];
+  const deliveryPending = messages.some((message) => message.pending);
   const scrollRef = useRef<ScrollView>(null);
   const scrollFrame = useRef<number | null>(null);
   const { width } = useWindowDimensions();
@@ -65,7 +66,7 @@ export function ChatPane() {
   }, [messages]);
   const lastReply = [...messages].reverse().find((message) => message.role === "assistant" && message.kind === "text" && !message.streaming);
   const statusText = connection !== "connected" ? connection === "connecting" ? "Connecting…" : "Channel offline"
-    : agent?.status === "offline" ? "Agent offline" : busy ? "Working…" : `${transportLabel} · ${agent?.title ?? "Connected"}`;
+    : agent?.status === "offline" ? "Agent offline" : busy ? "Working…" : deliveryPending ? "Sending…" : `${transportLabel} · ${agent?.title ?? "Connected"}`;
 
   return (
     <KeyboardAvoidingView className="min-w-0 flex-1 bg-app" behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}>
@@ -97,6 +98,7 @@ export function ChatPane() {
       ) : <>
         <View className="min-h-0 min-w-0 flex-1">
           <ScrollView key={selectedId} ref={scrollRef} testID="chat-transcript" className="min-w-0 flex-1"
+            role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
             accessibilityLabel={`Conversation with ${agent.name}`} onScroll={onScroll} scrollEventThrottle={32}
             onContentSizeChange={() => { if (pinnedRef.current) scrollToLatest(); }}
             onLayout={() => { if (pinnedRef.current) scrollToLatest(); }}
@@ -115,7 +117,7 @@ export function ChatPane() {
               </View>
             ) : <MessageBubble key={row.message.id} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
               replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
-              retryDisabled={connection !== "connected" || busy || agent.status === "offline"} onRetry={(id) => void retryMessage(id)} />)}
+              retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"} onRetry={(id) => void retryMessage(id)} />)}
             {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
               <TypingDots reducedMotion={reducedMotion} /><Text className="text-[12px] text-ink-secondary">{agent.name} is working…</Text>
             </View> : null}
@@ -129,7 +131,7 @@ export function ChatPane() {
         <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
           {busy ? `${agent.name} is replying.` : lastReply ? `${agent.name}${lastReply.interrupted ? " stopped" : " replied"}: ${lastReply.text ?? lastReply.card?.title ?? "Attachment"}` : "Ready for your message."}
         </Text>
-        <Composer key={selectedId} agentName={agent.name} busy={busy} agentOffline={agent.status === "offline"} bottomInset={insets.bottom} />
+        <Composer key={selectedId} agentName={agent.name} busy={busy} deliveryPending={deliveryPending} agentOffline={agent.status === "offline"} bottomInset={insets.bottom} />
       </>}
     </KeyboardAvoidingView>
   );

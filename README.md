@@ -3,7 +3,7 @@
 Cross-platform chat client (iOS / Android / web) with a **Grok Bot–inspired** dark UI.
 Talks to [Zakura](https://github.com/Moonrend/Zakura) as a messaging channel — agents reply with **`chat_reply`**, not a separate local runtime.
 
-> Phase 1+: Expo UI polish is in place; **mock channel** is the default. Live WS client is implemented against a documented `zakurabot` wire protocol; the server-side platform adapter is still a separate Zakura PR.
+> **Mock channel** is the default for demos. Live mode uses the `zakurabot` v1 gateway implemented in the Zakura reference checkout; deploy a server with that gateway and create a Zakura Bot device token to connect.
 
 [中文说明](#zakura-bot-中文) · [Architecture](./docs/architecture.md)
 
@@ -13,10 +13,10 @@ Talks to [Zakura](https://github.com/Moonrend/Zakura) as a messaging channel —
 
 - Left **agent sidebar** with **search**, unread filter, and status dots
 - Main **chat thread**: streaming bubbles, tool-activity chips, empty / error states
-- Rounded **composer** with per-agent drafts, automatic height, interrupt, and keyboard avoidance
-- Quoted reply previews, selectable tool details, and keyboard-scrollable card tables
+- Rounded **composer** with per-agent drafts, delivery confirmation, interrupt progress, and keyboard avoidance
+- Quoted replies, selectable tool details, keyboard-scrollable transcripts and card tables (including headerless tables)
 - **Settings**: Zakura base URL + auth token (on-device only; never commit secrets)
-- **`ZakuraChannelClient`**: mock (default) + **live WebSocket** client (needs server adapter)
+- **`ZakuraChannelClient`**: mock (default) + **live WebSocket** client with stable retries and history upserts
 - Accessibility labels / live regions on primary controls
 
 ## Requirements
@@ -70,7 +70,7 @@ npx playwright install chromium  # first browser-test run
 npm run test:web
 ```
 
-Browser checks cover desktop/mobile layouts, IME input, draft focus, live transport events, and WCAG checks with axe. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
+Browser checks cover desktop/mobile layouts, IME input, keyboard focus/scrolling, reconnect retries, history replay, interrupt refusal, unsupported attachment input, and WCAG checks with axe. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
 
 
 ## CI / packaging
@@ -121,8 +121,10 @@ Open **Settings** (sidebar footer):
 | Field | Purpose |
 | --- | --- |
 | Base URL | Zakura server origin (default `http://127.0.0.1:8787`) |
-| Auth token | Device / API token for the live channel |
-| Use mock channel | Keep **on** until platform `zakurabot` exists on the server |
+| Auth token | Zakura Bot device token (admin/API tokens cannot authenticate this channel) |
+| Use mock channel | Keep **on** for demos; turn off after configuring a live device |
+
+In Zakura, add an enabled **Zakura Bot** binding to the agent, configure its model, and create a device. Copy the returned Base URL and token into Settings. See [Zakura’s setup guide](https://github.com/Moonrend/Zakura/blob/main/docs/zakurabot-channel.md).
 
 Settings persist locally in AsyncStorage (browser localStorage on web). Native SecureStore integration is not implemented. Do **not** put tokens in the repo or committed `.env` files.
 
@@ -146,26 +148,30 @@ tests/               Protocol / client / reducer unit tests
 | Streaming bubbles, tool chips, empty/error/a11y | **Real** |
 | Demo transcript + mock streaming replies | **Real (local mock)** |
 | Settings persistence (URL / token) | **Real (local only)** |
-| `ZakuraChannelClient` + live WS client + decoder | **Real client; needs server** |
+| `ZakuraChannelClient` + live WS client + decoder | **Real client; requires a configured Zakura server** |
 | Attachment uploads / adding agents from the client | **Stubbed** (controls disabled) |
 | Received attachments and card images | **Browser links**; embedded media playback is not implemented |
-| End-to-end live channel to Zakura | **Stubbed** until `zakurabot` adapter |
-| Platform `zakurabot` in Moonrend/Zakura | **Not in this repo** (separate PR) |
+| Real WS / persistence / remote tool integration | **Checked locally against Zakura’s test fixture with a controlled runtime** |
+| Platform `zakurabot` in Moonrend/Zakura | **Implemented in the reference checkout; deployed separately** |
+| Production model/device integration | **Not verified against a deployed server** |
+| Native SecureStore / persistent drafts | **Not implemented** |
 | Computer desktop viewer / voice / App Store | **Out of scope** |
 
 ## How it binds to Zakura
 
-See **[docs/architecture.md](./docs/architecture.md)**. Summary: Zakura adds platform **`zakurabot`** and binds a **`RemoteChannelSessionHandle`** per turn; agents must use **`chat_reply`** for user-visible messages; this client maps those frames to bubbles and chips.
+See **[docs/architecture.md](./docs/architecture.md)**. Zakura binds a **`RemoteChannelSessionHandle`** per turn on platform **`zakurabot`**; agents use **`chat_reply`** for user-visible messages, which this client maps to bubbles and chips.
 
 The v1 client also enforces these boundaries in `lib/channel/protocol.ts` and `live-client.ts`:
 
-- `ready` and `agents` carry complete rosters. Events for removed agents are ignored; removal/offline status clears their pending sends and active streams. An ordinary roster refresh preserves ongoing local work until `typing: false`, an ending error, or disconnect.
+- `ready` and `agents` carry complete rosters. Events for removed agents are ignored; removal/offline status clears pending requests and active output. An ordinary roster refresh preserves explicit live work; an idle snapshot can recover a stale busy handshake state.
 - A streaming `chat_reply` announces an id once per connection. Repeated announcements cannot erase tokens or reopen a finished reply. `message_done` finishes one reply; `typing: false` ends the turn, which may contain several replies. A non-streaming `chat_reply` is a complete snapshot and may include `interrupted: true` for stopped output.
-- User echoes must carry the original `clientMessageId`, even when the server assigns its own message id. Retry uses that same key. The server must deduplicate within the authenticated conversation, replay accepted echoes, and report the current turn state. The client never automatically resends on reconnect; an unconfirmed write is available for manual retry.
-- Send rejections include `agentId` and `clientMessageId`. Operational errors that leave a turn running, such as a refused interrupt, set `turnEnded: false`; uncorrelated agent errors otherwise end the turn. An old rejection after acknowledgement cannot fail an accepted message.
+- User echoes carry the original `clientMessageId`, even when the server assigns its own message id. Retry uses the same key and text; an accepted duplicate can receive only its stored echo. Pending delivery is separate from an active turn. The client never automatically resends on reconnect; an unconfirmed write is available for manual retry.
+- Send rejections include `agentId` and `clientMessageId`. An old rejection after acknowledgement cannot fail an accepted message. Interrupt requests have progress, timeout and duplicate-click protection; v1 refusals without `turnEnded` preserve ongoing output. Newer adapters may explicitly set `turnEnded: false` for operational failures or `true` for terminal errors.
 - The adapter must resolve workspace attachments to HTTP(S) URLs and set `reply_to` to the actual quoted platform message id, including the `RemoteChannelSessionHandle.inboundMessageId` default. Quotes resolve only inside the current conversation; missing history shows “Reply to earlier message”.
 
-Reconnect requires a fresh authenticated `ready` and fresh reply snapshots before deltas resume. Persistent history, replay cursors and turn ids are not implemented. End-to-end testing against Zakura still needs the server adapter; the browser tests emulate the proposed adapter.
+Reconnect requires a fresh authenticated `ready`. The reference server then replays the latest 100 persisted messages per authorized conversation; repeated ids upsert, and older backfill does not re-mark a read conversation. The current server sends complete reply snapshots; optional streaming support is also covered by browser tests. Client-side persistent history/drafts, replay cursors and turn ids remain unimplemented.
+
+A rapid reconnect during history catch-up exposed a duplicate-unsubscribe race in the reference **server** that can stop live posts while roster updates continue. The reproduction and required server-side fix are recorded in [the architecture notes](./docs/architecture.md#reference-server-limitation); the Zakura checkout was kept read-only.
 
 ## License
 
@@ -191,7 +197,7 @@ npm run typecheck && npm test
 
 ### 设置
 
-侧边栏底部 **Settings**：填写 Zakura **Base URL** 与 **Auth Token**（仅本地存储，勿提交密钥）。在服务端 `zakurabot` 适配就绪前请保持 **Use mock channel** 开启。
+在 Zakura 为 Agent 添加 **Zakura Bot** 绑定、配置模型并创建设备。在侧边栏 **Settings** 填入设备的 **Base URL** 与 **Token**，关闭 **Use mock channel**。普通 API / 管理员 Token 不能连接该消息通道；演示模式保持 Mock 开启。
 
 
 ### CI / 打包
@@ -211,6 +217,7 @@ npm run typecheck && npm test
 ### 现状
 
 - **已实现**：Expo 壳、侧边栏搜索 / 未读 / 状态点、流式气泡、工具 Chip、空态与错误态、Composer 草稿与键盘避让、a11y、Mock 通道、Live WS 客户端与协议解码、设置持久化。
-- **仍占位**：对真实 Zakura 的端到端 Live 通道（依赖仓库外的 `zakurabot` 平台适配）、电脑桌面预览、语音、上架。
+- **已联调**：参考 Zakura 服务端的真实 WS、持久化回执与历史补发、远程工具引用和附件下载；使用受控 runtime，未连接生产模型。快速重连时参考服务端有重复退订竞态，详见架构文档。
+- **仍占位**：附件上传、客户端添加 Agent、内嵌媒体、原生 SecureStore、持久化草稿；电脑桌面预览、语音和上架不在当前范围。
 
 架构与 `chat_reply` / `RemoteChannelSessionHandle` 说明见 [docs/architecture.md](./docs/architecture.md)。

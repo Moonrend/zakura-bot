@@ -1,25 +1,58 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Pressable, Text, TextInput, View, Platform } from "react-native";
+import { ActivityIndicator, Pressable, Text, TextInput, View, Platform, useWindowDimensions } from "react-native";
 import { ArrowUp, Plus, Square } from "lucide-react-native";
 import { useStore } from "@/lib/store";
 import { MAX_MESSAGE_LENGTH } from "@/lib/channel";
 import { cn } from "@/lib/cn";
 
-export function Composer({ agentName, busy, agentOffline = false, bottomInset = 0 }: {
+export function Composer({ agentName, busy, deliveryPending = false, agentOffline = false, bottomInset = 0 }: {
   agentName: string;
   busy: boolean;
+  deliveryPending?: boolean;
   agentOffline?: boolean;
   bottomInset?: number;
 }) {
-  const { selectedId, draftsByAgent, setDraft, clearDraft, send, interrupt, connection } = useStore();
+  const { selectedId, draftsByAgent, setDraft, clearDraft, send, interrupt, interrupting, connection } = useStore();
   const text = draftsByAgent[selectedId] ?? "";
+  const { height: windowHeight } = useWindowDimensions();
+  const maxInputHeight = Math.max(44, Math.min(160, Math.floor(windowHeight * 0.25)));
   const [focused, setFocused] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [height, setHeight] = useState(44);
+  const [attachmentNotice, setAttachmentNotice] = useState(false);
   const sending = useRef(false);
   const inputRef = useRef<TextInput>(null);
   const offline = connection !== "connected" || agentOffline;
-  const canSend = text.trim().length > 0 && !busy && !offline && !submitting;
+  const stopping = !!interrupting[selectedId];
+  const sendingMessage = submitting || deliveryPending;
+  const canSend = text.trim().length > 0 && !busy && !offline && !sendingMessage;
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const input = inputRef.current as unknown as HTMLTextAreaElement | null;
+    const hasFiles = (data: DataTransfer | null) => !!data &&
+      (Array.from(data.types).includes("Files") || Array.from(data.items).some((item) => item.kind === "file"));
+    const drop = (event: DragEvent) => {
+      if (!hasFiles(event.dataTransfer)) return;
+      // The browser's default file drop can navigate away and discard drafts.
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+      setAttachmentNotice(true);
+    };
+    const paste = (event: ClipboardEvent) => {
+      if (!hasFiles(event.clipboardData)) return;
+      if (!event.clipboardData?.getData("text/plain")) event.preventDefault();
+      setAttachmentNotice(true);
+    };
+    window.addEventListener("dragover", drop);
+    window.addEventListener("drop", drop);
+    input?.addEventListener("paste", paste);
+    return () => {
+      window.removeEventListener("dragover", drop);
+      window.removeEventListener("drop", drop);
+      input?.removeEventListener("paste", paste);
+    };
+  }, []);
 
   const resizeWebInput = useCallback(() => {
     if (Platform.OS !== "web") return;
@@ -28,10 +61,10 @@ export function Composer({ agentName, busy, agentOffline = false, bottomInset = 
     // scrollHeight is at least the current height. Reset before measuring so
     // deletion, sending and narrower/wider layouts can shrink as well as grow.
     input.style.height = "0px";
-    const nextHeight = Math.min(160, Math.max(44, input.scrollHeight));
+    const nextHeight = Math.min(maxInputHeight, Math.max(44, input.scrollHeight));
     input.style.height = `${nextHeight}px`;
     setHeight(nextHeight);
-  }, []);
+  }, [maxInputHeight]);
   useLayoutEffect(resizeWebInput, [text, resizeWebInput]);
   useEffect(() => {
     if (Platform.OS !== "web" || typeof ResizeObserver === "undefined") return;
@@ -55,7 +88,7 @@ export function Composer({ agentName, busy, agentOffline = false, bottomInset = 
     setSubmitting(true);
     try {
       const ok = await send(draft, agentId);
-      if (ok) clearDraft(agentId, draft);
+      if (ok) { clearDraft(agentId, draft); setAttachmentNotice(false); }
     } finally {
       sending.current = false;
       setSubmitting(false);
@@ -63,8 +96,11 @@ export function Composer({ agentName, busy, agentOffline = false, bottomInset = 
     }
   };
 
-  const hint = offline ? "Offline · your draft stays in this conversation"
+  const hint = attachmentNotice ? "File uploads aren’t available yet. Paste text or a link instead."
+    : offline ? "Offline · your draft stays in this conversation"
+    : stopping ? "Waiting for the agent to stop… Your draft stays here"
     : busy ? "You can draft your next message while the agent replies"
+    : deliveryPending ? "Waiting for delivery confirmation… You can keep drafting"
       : Platform.OS === "web" ? "Enter to send · Shift+Enter for a new line" : "Write a message, then tap Send";
 
   return (
@@ -80,16 +116,16 @@ export function Composer({ agentName, busy, agentOffline = false, bottomInset = 
         <TextInput
           ref={inputRef}
           value={text}
-          onChangeText={(value) => setDraft(selectedId, value)}
+          onChangeText={(value) => { setDraft(selectedId, value); setAttachmentNotice(false); }}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          onContentSizeChange={Platform.OS === "web" ? undefined : (event) => setHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))}
+          onContentSizeChange={Platform.OS === "web" ? undefined : (event) => setHeight(Math.max(44, event.nativeEvent.contentSize.height))}
           placeholder={busy ? `Reply to ${agentName}…` : `Message ${agentName}`}
           placeholderTextColor="#a3a3a3"
           accessibilityLabel={`Message ${agentName}`}
           accessibilityHint={offline ? "You can write a draft; sending is unavailable while offline." : hint}
           className="min-w-0 flex-1 rounded-xl px-1 py-3 text-[15px] leading-5 text-ink"
-          style={{ height, maxHeight: 160, textAlignVertical: "top" }}
+          style={{ height: Math.min(height, maxInputHeight), maxHeight: maxInputHeight, textAlignVertical: "top" }}
           maxLength={MAX_MESSAGE_LENGTH}
           multiline
           numberOfLines={1}
@@ -111,29 +147,30 @@ export function Composer({ agentName, busy, agentOffline = false, bottomInset = 
           }}
         />
         {busy ? (
-          <Pressable onPress={() => void interrupt()} disabled={connection !== "connected"}
+          <Pressable onPress={() => void interrupt()} disabled={offline || stopping}
             className="h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink active:opacity-80"
-            accessibilityRole="button" accessibilityLabel="Stop generating"
-            accessibilityState={{ disabled: connection !== "connected" }}>
-            <Square size={14} color="#070707" fill="#070707" />
+            accessibilityRole="button" accessibilityLabel={stopping ? "Stopping reply" : "Stop generating"}
+            aria-busy={stopping} accessibilityState={{ disabled: offline || stopping, busy: stopping }}>
+            {stopping ? <ActivityIndicator size="small" color="#070707" /> : <Square size={14} color="#070707" fill="#070707" />}
           </Pressable>
         ) : (
           <Pressable onPress={() => void submit()} disabled={!canSend}
             className={cn("h-11 w-11 shrink-0 items-center justify-center rounded-full", canSend ? "bg-accent active:opacity-80" : "bg-raised-hover")}
-            accessibilityRole="button" accessibilityLabel="Send message" aria-busy={submitting} accessibilityState={{ disabled: !canSend, busy: submitting }}>
-            <ArrowUp size={20} color={canSend ? "#fcfcfc" : "#a3a3a3"} />
+            accessibilityRole="button" accessibilityLabel="Send message" aria-busy={sendingMessage} accessibilityState={{ disabled: !canSend, busy: sendingMessage }}>
+            {sendingMessage ? <ActivityIndicator size="small" color="#a3a3a3" /> : <ArrowUp size={20} color={canSend ? "#fcfcfc" : "#a3a3a3"} />}
           </Pressable>
         )}
       </View>
-      <View className="mx-auto mt-2 w-full max-w-3xl flex-row items-start justify-between gap-2 px-2">
-        <Text className="min-w-0 flex-1 text-[11px] leading-4 text-ink-secondary">{hint}</Text>
+      {windowHeight >= 400 || attachmentNotice ? <View className="mx-auto mt-2 w-full max-w-3xl flex-row items-start justify-between gap-2 px-2">
+        <Text accessibilityLiveRegion={attachmentNotice ? "polite" : "none"}
+          className={cn("min-w-0 flex-1 text-[11px] leading-4", attachmentNotice ? "text-warning" : "text-ink-secondary")}>{hint}</Text>
         {text.length > MAX_MESSAGE_LENGTH * 0.8 ? (
           <Text className={cn("shrink-0 text-[11px] leading-4", text.length === MAX_MESSAGE_LENGTH ? "text-warning" : "text-ink-secondary")}
             accessibilityLabel={`${text.length} of ${MAX_MESSAGE_LENGTH} characters`}>
             {text.length}/{MAX_MESSAGE_LENGTH}
           </Text>
         ) : null}
-      </View>
+      </View> : null}
     </View>
   );
 }

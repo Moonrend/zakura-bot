@@ -12,13 +12,14 @@ const STATUS_DOT = { idle: "bg-success", busy: "bg-warning", offline: "bg-ink-se
 const STATUS_LABEL = { idle: "Available", busy: "Working", offline: "Offline" };
 
 export function AgentSidebar() {
-  const { agents, selectedId, selectAgent, messagesByAgent, draftsByAgent, connection, transportLabel, setSidebarOpen } = useStore();
+  const { agents, selectedId, selectAgent, messagesByAgent, draftsByAgent, typing, connection, transportLabel, setSidebarOpen } = useStore();
   const router = useRouter();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const compact = width < 768;
   const [query, setQuery] = useState("");
   const searchRef = useRef<TextInput>(null);
+  const unreadFilterRef = useRef<View>(null);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const unreadCount = agents.filter((agent) => agent.unread).length;
   const visible = useMemo(() => {
@@ -35,7 +36,8 @@ export function AgentSidebar() {
   };
 
   return (
-    <View className="h-full w-full border-r border-hairline bg-panel" style={{ paddingTop: Math.max(insets.top, 12) }}>
+    <View className="h-full w-full border-r border-hairline bg-panel" style={{ paddingTop: Math.max(insets.top, 12) }}
+      role={Platform.OS === "web" ? "navigation" : undefined} accessibilityLabel="Agent conversations">
       <View className="flex-row items-center justify-between px-4 pb-2">
         <View className="min-w-0 flex-1">
           <Text className="text-[17px] font-semibold text-ink" accessibilityRole="header">Zakura Bot</Text>
@@ -71,7 +73,8 @@ export function AgentSidebar() {
         </View>
         <View className="mt-2 flex-row gap-1">
           {[false, true].map((onlyUnread) => (
-            <Pressable key={String(onlyUnread)} onPress={() => setUnreadOnly(onlyUnread)} accessibilityRole="button"
+            <Pressable key={String(onlyUnread)} ref={onlyUnread ? unreadFilterRef : undefined}
+              onPress={() => setUnreadOnly(onlyUnread)} accessibilityRole="button"
               accessibilityLabel={onlyUnread ? `Unread conversations, ${unreadCount}` : `All conversations, ${agents.length}`}
               {...(Platform.OS === "web" ? { "aria-pressed": unreadOnly === onlyUnread } : { accessibilityState: { selected: unreadOnly === onlyUnread } })}
               className={cn("min-h-11 flex-1 flex-row items-center justify-center gap-2 rounded-xl px-3", unreadOnly === onlyUnread ? "bg-raised" : "active:bg-raised/50")}>
@@ -100,11 +103,15 @@ export function AgentSidebar() {
           const selected = selectedId === agent.id;
           const messages = messagesByAgent[agent.id] ?? [];
           const last = [...messages].reverse().find((message) => message.kind === "text");
-          const status = connection !== "connected" ? "offline" : agent.status;
+          const status = connection !== "connected" ? "offline" : typing[agent.id] ? "busy" : agent.status;
           const draft = draftsByAgent[agent.id]?.trim();
           const subtitle = draft ? `Draft: ${draft}` : status === "busy" ? "Working…" : agent.preview ?? agent.title ?? "No messages yet";
           return (
-            <Pressable key={agent.id} onPress={() => { selectAgent(agent.id); if (compact) setSidebarOpen(false); }}
+            <Pressable key={agent.id} onPress={() => {
+              selectAgent(agent.id);
+              if (compact) setSidebarOpen(false);
+              else if (unreadOnly && Platform.OS === "web") unreadFilterRef.current?.focus();
+            }}
               accessibilityRole="button"
               {...(Platform.OS === "web" ? { "aria-pressed": selected } : { accessibilityState: { selected } })}
               accessibilityLabel={`${agent.name}${agent.unread ? ", unread" : ""}. ${STATUS_LABEL[status]}. ${subtitle}`}

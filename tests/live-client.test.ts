@@ -7,12 +7,15 @@ import { agents, liveHarness } from "./helpers";
 test("socket URLs preserve prefixes and reject credentials or unsupported protocols", () => {
   assert.equal(zakuraSocketUrl(" https://example.com/zakura/ "), "wss://example.com/zakura/api/zakurabot/ws");
   assert.equal(zakuraSocketUrl("ws://localhost:8787/api/zakurabot/ws/"), "ws://localhost:8787/api/zakurabot/ws");
+  assert.equal(zakuraSocketUrl("http://localhost:8787"), "ws://localhost:8787/api/zakurabot/ws");
+  assert.equal(zakuraSocketUrl("https://example.com/"), "wss://example.com/api/zakurabot/ws");
   for (const baseUrl of ["file:///tmp", "https://user:pass@example.com", "https://example.com?token=secret", "https://example.com/#x", "invalid"]) {
     assert.throws(() => zakuraSocketUrl(baseUrl));
     assert.ok(validateLiveSettings({ baseUrl, token: "token" }));
   }
   assert.equal(validateLiveSettings({ baseUrl: "http://localhost", token: "x" }), null);
   assert.ok(validateLiveSettings({ baseUrl: "http://localhost", token: " " }));
+  assert.ok(validateLiveSettings({ baseUrl: "http://localhost", token: "x".repeat(257) }));
 });
 
 test("chat_reply normalizes raw text, quotes, attachments, cards and links", () => {
@@ -150,7 +153,8 @@ test("writes are correlated with echoed ids, rejection and acknowledgement timeo
   t.mock.timers.tick(100);
   assert.equal(events.at(-1)?.type, "error");
   assert.equal((events.at(-1) as { clientMessageId?: string }).clientMessageId, "local2");
-  await client.sendMessage({ agentId: "a", text: "again", clientMessageId: "local2" });
+  await assert.rejects(client.sendMessage({ agentId: "a", text: "different", clientMessageId: "local2" }), /different text/);
+  await client.sendMessage({ agentId: "a", text: "next", clientMessageId: "local2" });
   socket.frame({ type: "error", agentId: "a", clientMessageId: "local2", message: "Rejected" });
   const count = events.length;
   t.mock.timers.tick(100);
@@ -273,4 +277,137 @@ test("failed interrupt writes trigger reconnect instead of leaving a falsely con
   sockets[0].throwOnSend = true;
   await assert.rejects(client.interrupt("a"));
   assert.equal(client.getConnectionState(), "error");
+});
+
+test("server cards may contain headerless tables, and empty table decoration is omitted", () => {
+  const frame = { type: "chat_reply", agentId: "a", messageId: "card", createdAt: 1 };
+  const decoded = decodeServerFrame(JSON.stringify({ ...frame, payload: { kind: "card", card: {
+    table: { headers: [], rows: [["Task", "Done"], ["Notes"]] },
+  } } }));
+  assert.equal(decoded?.type, "chat_reply");
+  if (decoded?.type === "chat_reply") assert.deepEqual(decoded.message.card?.table?.headers, []);
+  const emptyTable = decodeServerFrame(JSON.stringify({ ...frame, payload: { card: { title: "Summary", table: { headers: [], rows: [] } } } }));
+  if (emptyTable?.type === "chat_reply") assert.equal(emptyTable.message.card?.table, undefined);
+  assert.throws(() => decodeServerFrame(JSON.stringify({ ...frame, payload: { card: { table: { headers: [], rows: [] } } } })));
+});
+
+test("interrupt waits once, preserves v1 refusals, times out, and accepts a later terminal event", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  socket.frame({ type: "typing", agentId: "a", active: true });
+  socket.frame({ type: "chat_reply", agentId: "a", messageId: "stream", createdAt: 1, streaming: true, payload: {} });
+  await client.interrupt("a");
+  await client.interrupt("a");
+  assert.equal(socket.sent.filter((frame) => frame.type === "interrupt").length, 1);
+  assert.deepEqual(events.at(-1), { type: "interrupt_pending", agentId: "a", pending: true });
+  socket.frame({ type: "error", agentId: "a", message: "Cannot stop this task" });
+  assert.equal((events.at(-1) as { turnEnded?: boolean }).turnEnded, false);
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "stream", delta: "still running" });
+  assert.equal(events.at(-1)?.type, "message_delta");
+  await client.interrupt("a");
+  t.mock.timers.tick(100);
+  assert.match(JSON.stringify(events.at(-1)), /Stopping was not confirmed/);
+  assert.equal((events.at(-1) as { turnEnded?: boolean }).turnEnded, false);
+  // Even a refusal that arrives after the timeout must not end the stream.
+  socket.frame({ type: "error", agentId: "a", message: "Late refusal" });
+  assert.equal((events.at(-1) as { turnEnded?: boolean }).turnEnded, false);
+  await client.interrupt("a");
+  socket.frame({ type: "typing", agentId: "a", active: false });
+  const count = events.length;
+  t.mock.timers.tick(1000);
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "stream", delta: "late" });
+  assert.equal(events.length, count);
+});
+
+test("disconnect and roster revocation cancel interrupt timers; explicit turn errors still end output", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  await client.interrupt("a");
+  socket.frame({ type: "agents", agents: [agents[1]] });
+  let count = events.length;
+  t.mock.timers.tick(100);
+  assert.equal(events.length, count);
+  await client.interrupt("b");
+  socket.frame({ type: "chat_reply", agentId: "b", messageId: "stream", createdAt: 1, streaming: true, payload: {} });
+  socket.frame({ type: "error", agentId: "b", turnEnded: true, message: "Run failed" });
+  count = events.length;
+  socket.frame({ type: "message_delta", agentId: "b", messageId: "stream", delta: "late" });
+  t.mock.timers.tick(100);
+  assert.equal(events.length, count);
+  await client.interrupt("b");
+  client.disconnect();
+  count = events.length;
+  t.mock.timers.tick(1000);
+  assert.equal(events.length, count);
+});
+
+test("tool starts remain terminal through repeated results, turn endings and offline rosters", async (t) => {
+  const { client, sockets, events } = liveHarness(); t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  const activity = { type: "tool_activity", agentId: "a", message: { id: "tool", agentId: "a", role: "assistant", kind: "activity", createdAt: 1, tool: { name: "search" } } };
+  socket.frame(activity);
+  socket.frame({ ...activity, message: { ...activity.message, tool: { name: "search", ok: true } } });
+  let count = events.length;
+  socket.frame(activity);
+  assert.equal(events.length, count);
+  const second = { ...activity, message: { ...activity.message, id: "second" } };
+  socket.frame(second);
+  socket.frame({ type: "typing", agentId: "a", active: false });
+  count = events.length;
+  socket.frame(second);
+  assert.equal(events.length, count);
+  const third = { ...activity, message: { ...activity.message, id: "third" } };
+  socket.frame(third);
+  socket.frame({ type: "agents", agents: [{ ...agents[0], status: "offline" }] });
+  socket.frame({ type: "agents", agents });
+  count = events.length;
+  socket.frame(third);
+  assert.equal(events.length, count);
+});
+
+test("idempotency survives reconnect, mismatched receipts, late rejection and history replay", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  const input = { agentId: "a", clientMessageId: "user", text: "Original" };
+  const echo = { type: "message", message: { id: "server", clientMessageId: "user", agentId: "a", role: "user", kind: "text", text: "Original", createdAt: 1 } };
+  await client.sendMessage(input);
+  sockets[0].frame({ ...echo, message: { ...echo.message, text: "Different" } });
+  assert.equal(events.some((event) => event.type === "message"), false);
+  t.mock.timers.tick(100);
+  sockets[0].frame({ type: "error", agentId: "a", clientMessageId: "user", message: "Delayed rejection" });
+  assert.match(JSON.stringify(events.at(-1)), /Delayed rejection/);
+  sockets[0].remoteClose(1006);
+  t.mock.timers.tick(1000);
+  const socket = sockets[1]; socket.open(); socket.ready();
+  await assert.rejects(client.sendMessage({ ...input, text: "Changed on retry" }), /different text/);
+  socket.frame(echo);
+  await client.sendMessage(input);
+  assert.equal(socket.sent.filter((frame) => frame.type === "send").length, 0, "an acknowledged retry reuses the stored receipt");
+  const count = events.length;
+  socket.frame({ type: "error", agentId: "a", clientMessageId: "user", message: "Stale rejection" });
+  t.mock.timers.tick(100);
+  assert.equal(events.length, count);
+});
+
+test("disconnecting from a Stop progress listener cannot send on a replacement socket or restart retries", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  client.subscribe((event) => {
+    if (event.type === "interrupt_pending" && event.pending) client.disconnect();
+  });
+  await assert.rejects(client.interrupt("a"), /disconnected/);
+  assert.equal(client.getConnectionState(), "disconnected");
+  const count = events.length;
+  t.mock.timers.tick(60_000);
+  assert.equal(events.length, count);
+  assert.equal(sockets.length, 1);
+  assert.equal(sockets[0].sent.some((frame) => frame.type === "interrupt"), false);
 });

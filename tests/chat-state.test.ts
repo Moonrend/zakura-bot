@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chatReducer, emptyChatState } from "../lib/chat-state";
+import { chatReducer, emptyChatState, isAgentWorking } from "../lib/chat-state";
 import type { ChatMessage } from "../lib/types";
 import { agents } from "./helpers";
 
@@ -164,8 +164,7 @@ test("roster refresh preserves ongoing work and offline previews reflect failed 
   state = chatReducer(state, { type: "optimistic", message: { ...reply("user"), role: "user" } });
   state = chatReducer(state, { type: "message", message: { ...reply("stream"), streaming: true } });
   state = chatReducer(state, { type: "agents", agents });
-  assert.equal(state.typing.a, true);
-  assert.equal(state.agents[0].status, "busy");
+  assert.equal(isAgentWorking(state, "a"), true);
   state = chatReducer(state, { type: "agents", agents: [{ ...agents[0], status: "offline" }, agents[1]] });
   assert.equal(state.typing.a, false);
   assert.equal(state.messagesByAgent.a[0].failed, true);
@@ -193,11 +192,82 @@ test("an older send timeout or a failed interrupt does not stop the current repl
   state = chatReducer(state, { type: "optimistic", message: { ...reply("new", "a", "Second", 2), role: "user" } });
   state = chatReducer(state, { type: "message", message: { ...reply("stream", "a", "Answer", 3), streaming: true } });
   state = chatReducer(state, { type: "error", agentId: "a", clientMessageId: "old", message: "Old send not confirmed" });
-  assert.equal(state.typing.a, true);
+  assert.equal(isAgentWorking(state, "a"), true);
   assert.equal(state.messagesByAgent.a[0].failed, true);
   assert.equal(state.messagesByAgent.a[2].streaming, true);
   state = chatReducer(state, { type: "error", agentId: "a", message: "Interrupt denied", turnEnded: false });
-  assert.equal(state.typing.a, true);
+  assert.equal(isAgentWorking(state, "a"), true);
   state = chatReducer(state, { type: "message_delta", agentId: "a", messageId: "stream", delta: " continues" });
   assert.equal(state.messagesByAgent.a[2].text, "Answer continues");
+});
+
+test("delivery-only retries and history echoes never fabricate a new agent turn", () => {
+  let state = initial();
+  const user = { ...reply("local", "a", "Hello", 1), role: "user" as const };
+  state = chatReducer(state, { type: "optimistic", message: user });
+  assert.equal(isAgentWorking(state, "a"), false);
+  assert.equal(state.agents[0].preview, "Sending · Hello");
+  state = chatReducer(state, { type: "agents", agents });
+  state = chatReducer(state, { type: "connection", state: "error" });
+  state = chatReducer(state, { type: "connection", state: "connected" });
+  state = chatReducer(state, { type: "optimistic", message: user });
+  state = chatReducer(state, { type: "message", message: { ...user, id: "server", clientMessageId: "local" } });
+  state = chatReducer(state, { type: "message", message: reply("history", "a", "Already completed", 2) });
+  assert.equal(state.messagesByAgent.a.length, 2);
+  assert.equal(state.messagesByAgent.a[0].pending, false);
+  assert.equal(isAgentWorking(state, "a"), false);
+  state = chatReducer(state, { type: "typing", agentId: "a", active: true });
+  state = chatReducer(state, { type: "agents", agents });
+  assert.equal(isAgentWorking(state, "a"), true, "an explicit live turn still survives a roster refresh");
+});
+
+test("an idle roster recovers a busy handshake snapshot without losing explicit live work", () => {
+  let state = initial();
+  state = chatReducer(state, { type: "agents", agents: [{ ...agents[0], status: "busy" }, agents[1]] });
+  assert.equal(isAgentWorking(state, "a"), true);
+  state = chatReducer(state, { type: "agents", agents });
+  assert.equal(isAgentWorking(state, "a"), false);
+  state = chatReducer(state, { type: "message", message: { ...reply("stream"), streaming: true } });
+  state = chatReducer(state, { type: "agents", agents });
+  assert.equal(isAgentWorking(state, "a"), true);
+  state = chatReducer(state, { type: "message_done", agentId: "a", messageId: "stream" });
+  assert.equal(isAgentWorking(state, "a"), false, "a lone stream must not invent an endless typing pulse");
+});
+
+test("older history interleaved with live replies preserves read state and chronological previews", () => {
+  let state = initial();
+  state = chatReducer(state, { type: "message", message: reply("latest", "a", "Seen live", 100) });
+  state = chatReducer(state, { type: "select", agentId: "b" });
+  state = chatReducer(state, { type: "connection", state: "error" });
+  state = chatReducer(state, { type: "agents", agents });
+  state = chatReducer(state, { type: "connection", state: "connected" });
+  state = chatReducer(state, { type: "message", message: reply("older", "a", "History backfill", 50) });
+  assert.equal(state.agents[0].unread, false);
+  assert.equal(state.agents[0].preview, "Seen live");
+  assert.deepEqual(state.messagesByAgent.a.map((message) => message.id), ["older", "latest"]);
+  state = chatReducer(state, { type: "message", message: reply("same-time", "a", "Another reply", 100) });
+  assert.equal(state.agents[0].unread, true, "distinct live posts can share a timestamp");
+  state = chatReducer(state, { type: "select", agentId: "a" });
+  state = chatReducer(state, { type: "message", message: { ...reply("stream", "a", "", 101), streaming: true } });
+  state = chatReducer(state, { type: "select", agentId: "b" });
+  state = chatReducer(state, { type: "message_delta", agentId: "a", messageId: "stream", delta: "New tokens" });
+  assert.equal(state.agents[0].unread, true);
+  state = chatReducer(state, { type: "agents", agents: [agents[1]] });
+  assert.equal(state.readThroughByAgent.a, undefined);
+});
+
+test("replayed tool starts cannot resurrect completed, cancelled or disconnected chips", () => {
+  for (const terminal of ["done", "stopped", "disconnected"] as const) {
+    let state = initial();
+    const message: ChatMessage = { ...reply("tool"), kind: "activity", tool: { name: "search" } };
+    state = chatReducer(state, { type: "tool_activity", agentId: "a", message });
+    assert.equal(isAgentWorking(state, "a"), true);
+    if (terminal === "done") state = chatReducer(state, { type: "tool_activity", agentId: "a", message: { ...message, tool: { name: "search", ok: true } } });
+    else if (terminal === "stopped") state = chatReducer(state, { type: "typing", agentId: "a", active: false });
+    else state = chatReducer(state, { type: "connection", state: "error" });
+    const settled = state.messagesByAgent.a[0];
+    state = chatReducer(state, { type: "tool_activity", agentId: "a", message });
+    assert.equal(state.messagesByAgent.a[0], settled);
+    assert.equal(isAgentWorking(state, "a"), false);
+  }
 });

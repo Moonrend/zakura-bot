@@ -1,10 +1,9 @@
 /**
  * ZakuraChannelClient — transport contract for the `zakurabot` platform.
  *
- * Phase 1 ships a mock implementation plus a live WebSocket client whose wire
- * format is documented in docs/architecture.md. The server-side platform
- * adapter lands separately in Moonrend/Zakura; until then the live client
- * connects, fails, and reports a clear error state.
+ * Ships a mock plus a live WebSocket client for the Zakura v1 gateway.
+ * The server, device setup and optional streaming extension are documented in
+ * docs/architecture.md; server services are maintained in Moonrend/Zakura.
  */
 
 import type { Agent, ChatMessage } from "../types";
@@ -21,6 +20,8 @@ export type ChannelEvent =
   | { type: "message_done"; agentId: string; messageId: string; interrupted?: boolean }
   | { type: "tool_activity"; agentId: string; message: ChatMessage }
   | { type: "typing"; agentId: string; active: boolean }
+  /** Local request state; v1 acknowledges interrupt by ending typing or an error. */
+  | { type: "interrupt_pending"; agentId: string; pending: boolean }
   | { type: "error"; message: string; agentId?: string; clientMessageId?: string;
       /** False for operational failures (e.g. interrupt denied) that leave the turn running. */
       turnEnded?: boolean };

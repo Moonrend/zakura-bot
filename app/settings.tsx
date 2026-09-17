@@ -72,10 +72,10 @@ export default function SettingsScreen() {
       <Text className="mb-2 text-[13px] font-semibold text-ink">Auth token</Text>
       <TextInput value={token} onChangeText={(value) => { edit(); setToken(value); }}
         editable={settingsReady && !saving} autoCapitalize="none" autoCorrect={false} autoComplete="off" secureTextEntry
-        accessibilityLabel="Auth token" placeholder="Device or API token" placeholderTextColor="#a3a3a3"
+        accessibilityLabel="Auth token" placeholder="Zakura Bot device token" placeholderTextColor="#a3a3a3"
         className="mb-5 min-h-11 rounded-xl border border-hairline bg-panel px-4 py-3 text-[15px] text-ink" />
       <Text className="mb-6 text-[13px] leading-6 text-ink-secondary">
-        Live mode requires a Zakura server with the zakurabot channel adapter. The client is ready for integration; that server adapter is not included yet.
+        In Zakura, add a Zakura Bot binding to your agent and create a device. Enter that device’s Base URL and token here.
       </Text>
       {error ? <View className="mb-4 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3" accessibilityRole="alert" accessibilityLiveRegion="polite">
         <Text className="text-[13px] leading-5 text-danger">{error}</Text>
@@ -92,7 +92,7 @@ export default function SettingsScreen() {
         <Text className="text-[14px] text-ink-secondary">Close</Text>
       </Pressable>
       <Text className="mt-6 text-[12px] leading-5 text-ink-secondary">
-        {Platform.OS === "web" ? "The URL and token are stored in this browser." : "The URL and token are stored locally on this device."} Conversation history and drafts stay in memory and reset when the app reloads or you switch channels.
+        {Platform.OS === "web" ? "The URL and token are stored in this browser." : "The URL and token are stored locally on this device."} Drafts reset when you reload or switch channels. Live message history is restored from your server on reconnect.
       </Text>
     </ScrollView>
   );

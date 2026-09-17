@@ -1,4 +1,4 @@
-/** Proposed zakurabot v1 wire contract. No server adapter is shipped here. */
+/** Zakurabot v1 wire contract plus optional streaming/turn-ended extensions. */
 import type { Agent, ChatMessage, MessageAttachment, MessageCard, MessageLink } from "../types";
 import type { ChannelEvent } from "./types";
 
@@ -98,9 +98,10 @@ function card(value: unknown): MessageCard | undefined {
   if (value.table !== undefined) {
     requireValid(record(value.table));
     const { headers, rows } = value.table;
-    requireValid(Array.isArray(headers) && headers.length > 0 && headers.every((cell) => typeof cell === "string"));
+    // RemoteChannelSessionHandle cards can contain body rows without headers.
+    requireValid(Array.isArray(headers) && headers.every((cell) => typeof cell === "string"));
     requireValid(Array.isArray(rows) && rows.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === "string")));
-    result.table = { headers, rows };
+    if (headers.length || rows.length) result.table = { headers, rows };
   }
   requireValid(result.title?.trim() || result.subtitle?.trim() || result.text?.trim() || result.imageUrl ||
     result.fields?.some((field) => field.label.trim() || field.value.trim()) || result.images?.length ||

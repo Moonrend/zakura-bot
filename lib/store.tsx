@@ -6,7 +6,7 @@ import {
 } from "./channel";
 import { DEMO_AGENTS } from "./channel/mock-client";
 import { MAX_MESSAGE_LENGTH } from "./channel/types";
-import { chatReducer, emptyChatState, previewFromMessages, type ChatAction, type ChannelError } from "./chat-state";
+import { chatReducer, emptyChatState, isAgentWorking, previewFromMessages, type ChatAction, type ChannelError } from "./chat-state";
 import { loadSettings, saveSettings } from "./settings";
 import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage } from "./types";
 
@@ -18,6 +18,7 @@ type StoreValue = {
   messagesByAgent: Record<string, ChatMessage[]>;
   draftsByAgent: Record<string, string>;
   typing: Record<string, boolean>;
+  interrupting: Record<string, boolean>;
   settings: AppSettings;
   settingsReady: boolean;
   connection: ChannelConnectionState;
@@ -151,7 +152,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const client = clientRef.current;
     const agent = current.agents.find((item) => item.id === agentId);
     const trimmed = text.trim();
-    if (!agent || !trimmed || trimmed.length > MAX_MESSAGE_LENGTH || current.typing[agentId]) return false;
+    if (!agent || !trimmed || trimmed.length > MAX_MESSAGE_LENGTH || isAgentWorking(current, agentId) ||
+      current.messagesByAgent[agentId]?.some((message) => message.pending)) return false;
     if (agent.status === "offline" || client?.getConnectionState() !== "connected") {
       dispatch({ type: "error", agentId, message: "This conversation is offline. Reconnect or choose an available agent." });
       return false;
@@ -223,7 +225,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<StoreValue>(() => ({
     agents: state.agents, selectedId: state.selectedId, messagesByAgent: state.messagesByAgent,
-    draftsByAgent: state.draftsByAgent, typing: state.typing, connection: state.connection,
+    draftsByAgent: state.draftsByAgent,
+    typing: Object.fromEntries(state.agents.map((agent) => [agent.id, isAgentWorking(state, agent.id)])),
+    interrupting: state.interrupting, connection: state.connection,
     connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
     sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, interrupt, reconnect,
     dismissError, updateSettings, setSidebarOpen, setThreadVisible,

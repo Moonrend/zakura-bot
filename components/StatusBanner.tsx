@@ -1,4 +1,4 @@
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
 import { AlertTriangle, RefreshCw, WifiOff, X } from "lucide-react-native";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
@@ -94,6 +94,7 @@ function Banner({
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const { height } = useWindowDimensions();
   return (
     <View
       accessibilityLiveRegion="polite"
@@ -106,7 +107,11 @@ function Banner({
       )}
     >
       {icon}
-      <View className="min-w-0 flex-1">{children}</View>
+      <ScrollView className="min-w-0 flex-1" style={{ maxHeight: Math.max(48, Math.min(180, height * 0.25)) }}
+        accessibilityLabel="Channel status details" role={Platform.OS === "web" ? "region" : undefined}
+        tabIndex={Platform.OS === "web" ? 0 : undefined} keyboardShouldPersistTaps="handled">
+        {children}
+      </ScrollView>
       {action}
     </View>
   );

@@ -1,7 +1,7 @@
 /**
  * In-memory mock of ZakuraChannelClient.
  *
- * Simulates the event sequence the future `zakurabot` platform will produce:
+ * Exercises the optional streaming extension of the `zakurabot` contract:
  *   user message echo → typing → tool chip (chat_reply) → streamed reply → done.
  *
  * Triggers for testing UI states:
@@ -237,10 +237,10 @@ function mockReplyFor(userText: string, slow: boolean): string {
     );
   }
   if (/\b(hello|hi|hey)\b/.test(t) || t.includes("你好")) {
-    return "你好！我是 Zakura Bot 演示助手。当前走的是 `MockZakuraChannelClient`；接上真实 `zakurabot` 通道后，回复会来自 Zakura agent 的 `chat_reply`。";
+    return "你好！现在是演示模式。你可以发送消息、切换对话，或在 Settings 连接你的 Zakura Agent。";
   }
   if (t.includes("settings") || t.includes("设置")) {
-    return "打开左下角 Settings，填写 Zakura Base URL 与 Auth Token，然后关闭「Use mock channel」。在 Zakura 侧的 `zakurabot` 平台落地前，Live 模式会显示连接错误并自动重试。";
+    return "先在 Zakura 给 Agent 添加 Zakura Bot 绑定并创建设备。再打开左下角 Settings，填写设备的 Base URL 与 Token，关闭「Use mock channel」。没有配置服务器时，可以继续使用演示模式。";
   }
   if (t.includes("help") || t.includes("帮助")) {
     return "试试这些：\n• 发送包含 “slow” 的消息 → 长流式回复，测试 Stop\n• 发送包含 “fail” 的消息 → 工具失败态与错误横幅\n• 切换 agent 看未读小点与预览更新";

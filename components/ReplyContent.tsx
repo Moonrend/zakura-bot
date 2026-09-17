@@ -38,10 +38,10 @@ export function ReplyContent({ message, replyTarget }: { message: ChatMessage; r
           {card.table ? <ScrollView horizontal className="max-w-full" accessibilityLabel="Card table"
             role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}>
             <View role={Platform.OS === "web" ? "table" : undefined} accessibilityLabel="Reply table">
-              <View role={Platform.OS === "web" ? "row" : undefined} className="flex-row border-b border-hairline">
+              {card.table.headers.length ? <View role={Platform.OS === "web" ? "row" : undefined} className="flex-row border-b border-hairline">
                 {card.table.headers.map((header, index) => <Text key={index} role={Platform.OS === "web" ? "columnheader" : undefined}
                   className="w-36 p-2 text-[12px] font-semibold text-ink">{header}</Text>)}
-              </View>
+              </View> : null}
               {card.table.rows.map((row, index) => <View key={index} role={Platform.OS === "web" ? "row" : undefined} className="flex-row">
                 {(row.length ? row : [""]).map((cell, cellIndex) => <Text testID="message-text" key={cellIndex} role={Platform.OS === "web" ? "cell" : undefined}
                   className="w-36 p-2 text-[12px] text-ink" selectable>{cell}</Text>)}
