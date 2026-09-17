@@ -182,6 +182,7 @@ export function decodeServerFrame(raw: string): ServerFrame | null {
     case "error":
       requireValid(typeof frame.message === "string" && frame.message.trim() && optionalBool(frame.fatal) && optionalBool(frame.turnEnded));
       requireValid(frame.agentId === undefined || id(frame.agentId));
+      requireValid(frame.turnEnded !== true || id(frame.agentId));
       requireValid(frame.clientMessageId === undefined || (id(frame.clientMessageId) && id(frame.agentId)));
       return { type: "error", message: frame.message, agentId: frame.agentId as string | undefined,
         // v1 errors report failed operations. Only the explicit extension can

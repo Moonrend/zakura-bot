@@ -5,6 +5,8 @@ export interface ChannelError {
   message: string;
   agentId?: string;
   clientMessageId?: string;
+  /** A delivery receipt cannot resolve a failure of the subsequent agent turn. */
+  turnEnded?: boolean;
 }
 
 export interface ChatState {
@@ -116,7 +118,7 @@ function putMessage(state: ChatState, incoming: ChatMessage): ChatState {
       ? { ...state.readThroughByAgent, [message.agentId]: Math.max(state.readThroughByAgent[message.agentId] ?? 0, message.createdAt) }
       : state.readThroughByAgent,
     errors: message.role === "user" && !message.pending && !message.failed
-      ? state.errors.filter((error) => error.agentId !== message.agentId ||
+      ? state.errors.filter((error) => error.turnEnded || error.agentId !== message.agentId ||
         ![message.id, message.clientMessageId, message.serverId].some((id) => id !== undefined && id === error.clientMessageId))
       : state.errors,
     agents: state.agents.map((agent) => agent.id === message.agentId
@@ -227,17 +229,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       let next = state;
       if (action.agentId && action.clientMessageId) {
         const messages = state.messagesByAgent[action.agentId] ?? [];
-        const message = messages.find((item) => item.id === action.clientMessageId || item.serverId === action.clientMessageId);
-        if (message?.role !== "user" || (!message.pending && !message.failed)) return state;
+        const message = messages.find((item) => item.id === action.clientMessageId || item.serverId === action.clientMessageId || item.clientMessageId === action.clientMessageId);
+        if (message?.role !== "user") return state;
         const latestUser = [...messages].reverse().find((item) => item.role === "user");
+        const turnEnded = action.turnEnded === true && latestUser?.id === message.id;
+        const undelivered = message.pending || message.failed;
+        if (!undelivered && !turnEnded) return state;
         // Rejection or an absent receipt says nothing about an agent that may
         // already be working, including the interval before its first output.
-        if (action.turnEnded === true && latestUser?.id === message.id) {
-          next = endTurn(state, action.agentId);
-        }
-        next = putMessage(next, { ...message, pending: false, failed: true });
+        if (turnEnded) next = endTurn(state, action.agentId);
+        if (undelivered) next = putMessage(next, { ...message, pending: false, failed: true });
       } else if (action.agentId && action.turnEnded === true) next = endTurn(state, action.agentId);
-      const error: ChannelError = { message: action.message, agentId: action.agentId, clientMessageId: action.clientMessageId };
+      const error: ChannelError = { message: action.message, agentId: action.agentId, clientMessageId: action.clientMessageId,
+        ...(action.turnEnded === true ? { turnEnded: true } : {}) };
       return { ...next, errors: [...next.errors.filter((item) => item.agentId !== action.agentId), error] };
     }
   }

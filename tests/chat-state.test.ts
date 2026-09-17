@@ -342,6 +342,34 @@ test("replacement-client stream announcements preserve settled text until a comp
   }
 });
 
+test("a delivered message stays delivered when its correlated turn fails, and older turn errors stay scoped", () => {
+  let state = initial();
+  const user = { ...reply("local", "a", "First", 1), role: "user" as const };
+  state = chatReducer(state, { type: "optimistic", message: user });
+  state = chatReducer(state, { type: "message", message: { ...user, id: "server", clientMessageId: "local" } });
+  state = chatReducer(state, { type: "typing", agentId: "a", active: true });
+  state = chatReducer(state, { type: "message", message: { ...reply("stream", "a", "Partial", 2), streaming: true } });
+  state = chatReducer(state, { type: "draft", agentId: "a", text: "Keep this draft" });
+  const error = { type: "error" as const, agentId: "a", clientMessageId: "local", turnEnded: true, message: "Run failed" };
+  state = chatReducer(state, error);
+  assert.equal(isAgentWorking(state, "a"), false);
+  assert.equal(state.messagesByAgent.a[0].failed, false);
+  assert.equal(state.messagesByAgent.a[0].pending, false);
+  assert.equal(state.messagesByAgent.a[1].text, "Partial");
+  assert.equal(state.messagesByAgent.a[1].interrupted, true);
+  assert.equal(state.draftsByAgent.a, "Keep this draft");
+  assert.equal(state.errors.at(-1)?.message, "Run failed");
+  // Replaying the receipt only confirms delivery; it cannot dismiss a run error.
+  state = chatReducer(state, { type: "message", message: { ...user, id: "server", clientMessageId: "local" } });
+  assert.equal(state.errors.at(-1)?.message, "Run failed");
+  state = chatReducer(state, { type: "message", message: { ...reply("new", "a", "Second", 3), role: "user" } });
+  state = chatReducer(state, { type: "typing", agentId: "a", active: true });
+  state = chatReducer(state, { type: "message", message: { ...reply("new-stream", "a", "New reply", 4), streaming: true } });
+  const before = state;
+  assert.equal(chatReducer(state, error), before);
+  assert.equal(isAgentWorking(state, "a"), true);
+});
+
 test("an unconfirmed or rejected send cannot clear typing before the first visible reply", () => {
   let state = initial();
   state = chatReducer(state, { type: "optimistic", message: { ...reply("user"), role: "user" } });

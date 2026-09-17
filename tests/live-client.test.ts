@@ -2,7 +2,112 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CLIENT_INFO, validateLiveSettings, zakuraSocketUrl } from "../lib/channel/live-client";
 import { decodeServerFrame } from "../lib/channel/protocol";
+import { chatReducer, emptyChatState, isAgentWorking } from "../lib/chat-state";
 import { agents, liveHarness, networkHarness } from "./helpers";
+
+test("an optimistic timestamp and a later transport clock cannot disagree about the active turn", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  t.mock.method(Date, "now", () => 20);
+  const { client, sockets, events } = liveHarness();
+  let state = emptyChatState();
+  client.subscribe((event) => { state = chatReducer(state, event); });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  state = chatReducer(state, { type: "optimistic", message: {
+    id: "local", agentId: "a", role: "user", kind: "text", text: "Local message", createdAt: 10,
+  } });
+  await client.sendMessage({ agentId: "a", clientMessageId: "local", text: "Local message", localCreatedAt: 10 });
+  assert.equal(socket.sent.at(-1)?.localCreatedAt, undefined, "the local clock is not a wire protocol field");
+  socket.frame({ type: "message", message: {
+    id: "remote", agentId: "a", role: "user", kind: "text", text: "A newer user message", createdAt: 15,
+  } });
+  socket.frame({ type: "chat_reply", agentId: "a", messageId: "reply", createdAt: 30, streaming: true, payload: { text: "New reply" } });
+  await client.interrupt("a");
+  socket.frame({ type: "error", agentId: "a", clientMessageId: "local", turnEnded: true, message: "Earlier run failed" });
+  assert.equal((events.at(-1) as { turnEnded?: boolean }).turnEnded, false);
+  assert.equal(state.messagesByAgent.a[0].failed, true, "the unconfirmed earlier send is still retryable");
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "reply", delta: " continues" });
+  assert.equal(state.messagesByAgent.a.at(-1)?.text, "New reply continues");
+  assert.equal(state.interrupting.a, true);
+});
+
+test("receipt timestamps that tie older backfill keep terminal errors aligned with transcript order", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness();
+  let state = emptyChatState();
+  client.subscribe((event) => { state = chatReducer(state, event); });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  state = chatReducer(state, { type: "optimistic", message: {
+    id: "current", agentId: "a", role: "user", kind: "text", text: "current", createdAt: Date.now(),
+  } });
+  await client.sendMessage({ agentId: "a", clientMessageId: "current", text: "current" });
+  // History can precede a pending message's receipt. If the server timestamps
+  // tie, the transcript retains that order when it replaces the local clock.
+  for (const id of ["history", "current"]) socket.frame({ type: "message", message: {
+    id, clientMessageId: id, agentId: "a", role: "user", kind: "text", text: id, createdAt: 1,
+  } });
+  assert.deepEqual(state.messagesByAgent.a.map((message) => message.id), ["history", "current"]);
+  socket.frame({ type: "chat_reply", agentId: "a", messageId: "reply", createdAt: 2, streaming: true, payload: { text: "New reply" } });
+  await client.interrupt("a");
+  const count = events.length;
+  socket.frame({ type: "error", agentId: "a", clientMessageId: "history", turnEnded: true, message: "Old run failed" });
+  assert.equal(events.length, count, "an old failure must not stop transport output that the transcript still considers current");
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "reply", delta: " continues" });
+  assert.equal(state.messagesByAgent.a.at(-1)?.text, "New reply continues");
+  assert.equal(state.interrupting.a, true);
+  socket.frame({ type: "error", agentId: "a", clientMessageId: "current", turnEnded: true, message: "Current run failed" });
+  assert.equal(isAgentWorking(state, "a"), false);
+  assert.equal(state.errors.at(-1)?.message, "Current run failed");
+});
+
+test("correlated turn failures settle delivered replies without replaying old failures over a newer turn", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  const receipt = (id: string, createdAt: number) => ({ type: "message", message: {
+    id: `server-${id}`, clientMessageId: id, agentId: "a", role: "user", kind: "text", text: id, createdAt,
+  } });
+  const stream = (id: string) => ({ type: "chat_reply", agentId: "a", messageId: id, createdAt: 10,
+    streaming: true, payload: { text: "Received text" } });
+  const failure = { type: "error", agentId: "a", clientMessageId: "first", turnEnded: true, message: "Run failed after delivery" };
+  await client.sendMessage({ agentId: "a", clientMessageId: "first", text: "first" });
+  socket.frame(receipt("first", 2));
+  socket.frame({ type: "typing", agentId: "a", active: true });
+  socket.frame(stream("reply-first"));
+  await client.interrupt("a");
+  socket.frame(failure);
+  assert.deepEqual(events.at(-1), { ...failure, fatal: undefined });
+  assert.deepEqual(events.at(-2), { type: "interrupt_pending", agentId: "a", pending: false });
+  let count = events.length;
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "reply-first", delta: "Late tokens" });
+  t.mock.timers.tick(100);
+  assert.equal(events.length, count, "turn failure cancels both output and the pending Stop deadline");
+  await client.sendMessage({ agentId: "a", clientMessageId: "first", text: "first" });
+  assert.equal(socket.sent.filter((frame) => frame.type === "send").length, 1, "a delivered message stays delivered after its run fails");
+
+  await client.sendMessage({ agentId: "a", clientMessageId: "second", text: "second" });
+  socket.frame(receipt("second", 3));
+  socket.frame(receipt("history", 1));
+  socket.frame(stream("reply-second"));
+  await client.interrupt("a");
+  count = events.length;
+  socket.frame(failure);
+  socket.frame({ ...failure, clientMessageId: "history" });
+  assert.equal(events.length, count, "older correlated terminal errors cannot end the newer turn or clear its Stop request");
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "reply-second", delta: " continues" });
+  assert.equal(events.at(-1)?.type, "message_delta");
+  socket.frame({ ...failure, clientMessageId: "second" });
+  assert.equal(events.at(-1)?.type, "error", "older backfill cannot hide the latest user's terminal error");
+});
+
+test("turn-ending errors require an agent while ordinary v1 errors remain operational", () => {
+  assert.throws(() => decodeServerFrame(JSON.stringify({ type: "error", message: "Run failed", turnEnded: true })));
+  assert.deepEqual(decodeServerFrame(JSON.stringify({ type: "error", message: "Temporary channel issue" })), {
+    type: "error", message: "Temporary channel issue", agentId: undefined, clientMessageId: undefined, fatal: undefined, turnEnded: false,
+  });
+});
 
 test("receipt ids cannot collide with replies, tools or notices across reconnect", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });

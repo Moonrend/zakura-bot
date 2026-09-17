@@ -33,6 +33,8 @@ export interface SendMessageInput {
   text: string;
   /** Stable idempotency key. The server must include it in its user echo. */
   clientMessageId?: string;
+  /** Timestamp of the optimistic bubble, for local ordering only; never sent on the wire. */
+  localCreatedAt?: number;
 }
 
 export interface ZakuraChannelClient {

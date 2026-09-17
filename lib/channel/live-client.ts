@@ -96,7 +96,7 @@ export function validateLiveSettings(input: { baseUrl: string; token: string }):
 type Timer = ReturnType<typeof setTimeout>;
 const key = (agentId: string, messageId: string) => JSON.stringify([agentId, messageId]);
 type PendingWrite = { agentId: string; text: string; timer: Timer };
-type SentMessage = { agentId: string; text: string; echo?: ChatMessage };
+type SentMessage = { agentId: string; text: string; createdAt: number; echo?: ChatMessage };
 type ReceiptAlias = { agentId: string; clientMessageId: string };
 type OutputIdentity = Pick<ChatMessage, "agentId" | "role" | "kind">;
 type PendingInterrupt = { timer: Timer | null };
@@ -282,17 +282,22 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     if (frame.type === "error") {
       if (frame.fatal) { this.fail(frame.message, false); return; }
       if (frame.agentId && (this.state !== "connected" || !this.roster.has(frame.agentId))) return;
-      // A delayed rejection must not fail a delivered message or a newer turn.
+      // Delivery and turn completion are separate. A correlated run failure
+      // can follow its receipt, but an older failure cannot stop a newer turn.
       if (frame.clientMessageId && frame.agentId) {
-        const sent = this.sentMessages.get(key(frame.agentId, frame.clientMessageId));
-        if (!sent || sent.echo) return;
+        const messageKey = key(frame.agentId, frame.clientMessageId);
+        const sent = this.sentMessages.get(messageKey);
+        if (!sent) return;
+        const turnEnded = frame.turnEnded === true && this.isLatestUserMessage(frame.agentId, messageKey);
+        if (sent.echo && !turnEnded) return;
         this.acknowledge(frame.agentId, frame.clientMessageId);
+        frame = { ...frame, turnEnded };
       }
-      if (frame.agentId && !frame.clientMessageId) {
+      if (frame.agentId && (!frame.clientMessageId || frame.turnEnded)) {
         const agentId = frame.agentId;
+        if (frame.turnEnded === true) this.endOutput(agentId);
         this.finishInterrupt(agentId);
         if (this.socket !== socket || this.closedByUser) return;
-        if (frame.turnEnded === true) this.endOutput(agentId);
       }
       this.emitter.emit(frame);
       return;
@@ -469,10 +474,26 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       return null;
     }
     const receipt = { ...message, clientMessageId };
-    this.sentMessages.set(messageKey, { agentId: message.agentId, text: message.text!, echo: receipt });
+    this.rememberUserMessage(messageKey, { agentId: message.agentId, text: message.text!, createdAt: message.createdAt, echo: receipt });
     this.receiptAliases.set(serverKey, { agentId: message.agentId, clientMessageId });
     this.acknowledge(message.agentId, clientMessageId);
     return receipt;
+  }
+
+  private rememberUserMessage(messageKey: string, message: SentMessage) {
+    this.sentMessages.set(messageKey, message);
+    // Like the transcript, sort after every upsert and retain the previous
+    // order for ties. A receipt can replace a local timestamp after backfill
+    // has already moved ahead of it; original Map insertion order is stale.
+    this.sentMessages = new Map([...this.sentMessages].sort((a, b) => a[1].createdAt - b[1].createdAt));
+  }
+
+  private isLatestUserMessage(agentId: string, messageKey: string): boolean {
+    let latestKey: string | undefined;
+    for (const [candidateKey, message] of this.sentMessages) {
+      if (message.agentId === agentId) latestKey = candidateKey;
+    }
+    return latestKey === messageKey;
   }
 
   private acceptOutputIdentity(message: ChatMessage): boolean {
@@ -551,7 +572,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     }
     const previous = this.acknowledgements.get(messageKey);
     if (previous) return;
-    this.sentMessages.set(messageKey, { agentId: input.agentId, text });
+    const createdAt = sent?.createdAt ?? input.localCreatedAt ?? Date.now();
+    if (!Number.isFinite(createdAt) || createdAt < 0 || createdAt > 8.64e15) throw new Error("Invalid local message timestamp.");
+    this.rememberUserMessage(messageKey, { agentId: input.agentId, text, createdAt });
     const pending: PendingWrite = { agentId: input.agentId, text, timer: setTimeout(() => {
       if (this.acknowledgements.get(messageKey) !== pending) return;
       this.acknowledgements.delete(messageKey);

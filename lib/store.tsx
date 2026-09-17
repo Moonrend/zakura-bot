@@ -159,10 +159,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
     const previous = current.messagesByAgent[agentId]?.find((message) => message.id === messageId);
+    const localCreatedAt = previous?.createdAt ?? Date.now();
     dispatch({ type: "optimistic", message: { id: messageId, agentId, role: "user", kind: "text", text: trimmed,
-      createdAt: previous?.createdAt ?? Date.now() } });
+      createdAt: localCreatedAt } });
     try {
-      await client.sendMessage({ agentId, text: trimmed, clientMessageId: messageId });
+      await client.sendMessage({ agentId, text: trimmed, clientMessageId: messageId, localCreatedAt });
       return clientRef.current === client && client.getConnectionState() === "connected" &&
         stateRef.current.messagesByAgent[agentId]?.some((message) => message.id === messageId && !message.failed) === true;
     } catch (error) {

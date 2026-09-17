@@ -9,6 +9,7 @@ import { Composer } from "./Composer";
 import { StatusBanner } from "./StatusBanner";
 import { formatDay, useStore } from "@/lib/store";
 import { useReducedMotion } from "@/lib/use-reduced-motion";
+import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import type { ChatMessage } from "@/lib/types";
 
 const SUGGESTIONS = ["Say hello", "How do settings work?", "Run a slow reply", "help"];
@@ -94,9 +95,9 @@ export function ChatPane() {
         </View>
       </View>
 
-      <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner /></View>
+      <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner onFocusLost={focusTranscript} /></View>
       {!agent ? (
-        <ScrollView className="min-h-0 flex-1" accessibilityLabel="Channel setup"
+        <ScrollView ref={scrollRef} className="min-h-0 flex-1" accessibilityLabel="Channel setup"
           role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ flexGrow: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingVertical: 32 }}>
@@ -124,14 +125,14 @@ export function ChatPane() {
               maxWidth: 900, width: "100%", alignSelf: "center", flexGrow: rows.length === 0 ? 1 : undefined }}>
             {rows.length === 0 ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"}
               disabled={connection !== "connected" || agent.status === "offline" || busy}
-              onSuggest={(text) => void send(text, agent.id)} /> : null}
+              onSuggest={(text) => void send(text, agent.id)} onFocusLost={focusTranscript} /> : null}
             {rows.map((row) => row.kind === "day" ? (
               <View key={row.key} className="my-3 flex-row items-center gap-3">
                 <View className="h-px flex-1 bg-hairline/70" />
                 <Text className="text-[11px] text-ink-secondary">{row.label}</Text>
                 <View className="h-px flex-1 bg-hairline/70" />
               </View>
-            ) : <MessageBubble key={row.message.id} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
+            ) : <MessageBubble key={`message_${row.message.id}`} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
               replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
               retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
               onRetry={(id) => void retryMessage(id)} onRetryFocusLost={focusTranscript} />)}
@@ -176,9 +177,10 @@ function buildRows(messages: ChatMessage[]): Row[] {
   return rows;
 }
 
-function EmptyThread({ name, color, offline, disabled, onSuggest }: {
-  name: string; color: string; offline: boolean; disabled: boolean; onSuggest: (text: string) => void;
+function EmptyThread({ name, color, offline, disabled, onSuggest, onFocusLost }: {
+  name: string; color: string; offline: boolean; disabled: boolean; onSuggest: (text: string) => void; onFocusLost: () => void;
 }) {
+  const setRef = useFocusOnRemoval(onFocusLost);
   return (
     <View className="flex-1 items-center justify-center px-4 py-12">
       <BlobAvatar color={color} name={name} size={64} />
@@ -186,7 +188,7 @@ function EmptyThread({ name, color, offline, disabled, onSuggest }: {
       <Text className="mt-2 max-w-sm text-center text-[14px] leading-6 text-ink-secondary">
         {offline ? "You can write a draft here. Sending becomes available when this agent is online." : "A new conversation starts with a message."}
       </Text>
-      {!offline ? <View className="mt-6 flex-row flex-wrap justify-center gap-2">
+      {!offline ? <View ref={setRef} className="mt-6 flex-row flex-wrap justify-center gap-2">
         {SUGGESTIONS.map((suggestion) => <Pressable key={suggestion} onPress={() => onSuggest(suggestion)} disabled={disabled}
           accessibilityRole="button" accessibilityState={{ disabled }}
           className="min-h-11 justify-center rounded-full border border-hairline bg-panel px-4 py-3 active:bg-raised">

@@ -2,13 +2,14 @@ import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View, useWind
 import { AlertTriangle, RefreshCw, WifiOff, X } from "lucide-react-native";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
+import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { useRouter } from "expo-router";
 
 /**
  * Top-of-thread banner for connection problems and channel errors.
  * Renders nothing when connected and error-free.
  */
-export function StatusBanner() {
+export function StatusBanner({ onFocusLost }: { onFocusLost: () => void }) {
   const { connection, connectionDetail, lastError, reconnect, dismissError, settings, selectedId } =
     useStore();
   const router = useRouter();
@@ -19,7 +20,7 @@ export function StatusBanner() {
 
   if (connection === "connecting") {
     return (
-      <Banner tone="muted" icon={<ActivityIndicator size="small" color="#fcfcfc99" />}>
+      <Banner key="connecting" tone="muted" onFocusLost={onFocusLost} icon={<ActivityIndicator size="small" color="#fcfcfc99" />}>
         <Text className="text-[13px] text-ink-secondary">
           Connecting to Zakura{connectionDetail ? ` · ${connectionDetail}` : "…"}
         </Text>
@@ -31,7 +32,9 @@ export function StatusBanner() {
     const live = !settings.useMockChannel;
     return (
       <Banner
+        key="connection-error"
         tone="danger"
+        onFocusLost={onFocusLost}
         icon={<WifiOff size={14} color="#ff5667" />}
         action={
           <View className="items-end gap-1"><Pressable
@@ -63,7 +66,9 @@ export function StatusBanner() {
   // connected + error
   return (
     <Banner
+      key="operation-error"
       tone="warning"
+      onFocusLost={onFocusLost}
       icon={<AlertTriangle size={14} color="#ff9800" />}
       action={
         <Pressable
@@ -88,15 +93,18 @@ function Banner({
   icon,
   action,
   children,
+  onFocusLost,
 }: {
   tone: "muted" | "danger" | "warning";
   icon: React.ReactNode;
   action?: React.ReactNode;
   children: React.ReactNode;
+  onFocusLost: () => void;
 }) {
   const { height } = useWindowDimensions();
+  const setRef = useFocusOnRemoval(onFocusLost);
   return (
-    <View
+    <View ref={setRef}
       accessibilityLiveRegion="polite"
       accessibilityRole={tone === "muted" ? undefined : "alert"}
       className={cn(
