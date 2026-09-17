@@ -209,6 +209,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       // receive an auth/policy code instead of turning it into an endless retry.
       // Older handshake/pong deadlines must not cut this grace period short.
       this.clearSocketTimers();
+      // The UI settles pending operations as soon as the connection errors.
+      // Their deadlines must not report fresh failures while we await close.
+      this.clearRequestTimers();
       const detail = "Could not reach Zakura. Check the URL and channel configuration.";
       this.setState("error", detail);
       if (current()) this.closeTimer = setTimeout(() => {
@@ -474,15 +477,19 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.handshakeTimer = this.heartbeatTimer = this.pongTimer = this.closeTimer = null;
   }
 
-  private releaseSocket() {
-    this.clearSocketTimers();
+  private clearRequestTimers() {
     for (const pending of this.acknowledgements.values()) clearTimeout(pending.timer);
     this.acknowledgements.clear();
+    for (const pending of this.interrupts.values()) if (pending.timer) clearTimeout(pending.timer);
+    this.interrupts.clear();
+  }
+
+  private releaseSocket() {
+    this.clearSocketTimers();
+    this.clearRequestTimers();
     this.replies.clear();
     this.activities.clear();
     this.liveTyping.clear();
-    for (const pending of this.interrupts.values()) if (pending.timer) clearTimeout(pending.timer);
-    this.interrupts.clear();
     this.roster.clear();
     const socket = this.socket;
     this.socket = null;

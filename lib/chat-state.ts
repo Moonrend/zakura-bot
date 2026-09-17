@@ -73,18 +73,28 @@ function putMessage(state: ChatState, incoming: ChatMessage): ChatState {
   if (!state.agents.some((agent) => agent.id === incoming.agentId)) return state;
   const list = state.messagesByAgent[incoming.agentId] ?? [];
   const incomingId = incoming.role === "user" ? incoming.clientMessageId ?? incoming.id : incoming.id;
-  const previous = list.find((message) => message.id === incomingId) ??
-    list.find((message) => message.id === incoming.id || message.serverId === incoming.id);
+  const ownsId = (message: ChatMessage, id: string) =>
+    message.id === id || message.serverId === id || message.clientMessageId === id;
+  const byClientId = list.find((message) => ownsId(message, incomingId));
+  const byServerId = list.find((message) => ownsId(message, incoming.id));
+  if (byClientId && byServerId && byClientId !== byServerId) return state;
+  const previous = byClientId ?? byServerId;
   // Message ids identify one role and content kind for the lifetime of a thread.
   if (previous && (previous.role !== incoming.role || previous.kind !== incoming.kind)) return state;
-  // User messages are immutable, including history from a replacement client
-  // whose in-memory receipt aliases have not yet been restored.
-  if (previous?.role === "user" && previous.text !== incoming.text) return state;
+  // Keep receipt identity as well as text immutable across client replacement.
+  // A replay without correlation may use the known server id as its client id;
+  // accept that fallback without replacing the original optimistic alias.
+  if (previous?.role === "user") {
+    const serverId = previous.serverId ?? (!previous.pending && !previous.failed ? previous.id : undefined);
+    if (previous.text !== incoming.text ||
+      (serverId && incoming.id !== serverId && incoming.id !== previous.id) ||
+      (incoming.clientMessageId && !ownsId(previous, incoming.clientMessageId))) return state;
+  }
   // A replayed start must not resurrect a completed or disconnected tool chip.
   if (previous?.tool && !activeOutput(previous) && activeOutput(incoming)) return state;
   const stableId = previous?.id ?? incomingId;
   const message: ChatMessage = { ...previous, ...incoming, id: stableId,
-    clientMessageId: incoming.clientMessageId ?? previous?.clientMessageId,
+    clientMessageId: previous?.clientMessageId ?? incoming.clientMessageId,
     serverId: incoming.id !== stableId ? incoming.id : previous?.serverId };
   const updated = (previous ? list.map((item) => item.id === stableId ? message : item) : [...list, message])
     .sort((a, b) => a.createdAt - b.createdAt);

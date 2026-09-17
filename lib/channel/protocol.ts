@@ -87,7 +87,7 @@ function attachments(value: unknown): MessageAttachment[] | undefined {
     if (isHttpUrl(item)) return { url: item };
     requireValid(record(item) && isHttpUrl(item.url) && optionalString(item.name));
     requireValid(item.type === undefined || oneOf(item.type, ["image", "file", "audio", "video"]));
-    return { url: item.url, name: item.name, type: item.type as MessageAttachment["type"] };
+    return { url: item.url, name: item.name?.trim() || undefined, type: item.type as MessageAttachment["type"] };
   });
 }
 
@@ -114,7 +114,7 @@ function card(value: unknown): MessageCard | undefined {
     requireValid(Array.isArray(value.images));
     result.images = value.images.map((item) => {
       requireValid(record(item) && isHttpUrl(item.url) && optionalString(item.alt));
-      return { url: item.url, alt: item.alt };
+      return { url: item.url, alt: item.alt?.trim() || undefined };
     });
   }
   if (value.table !== undefined) {
@@ -206,7 +206,8 @@ export function decodeServerFrame(raw: string): ServerFrame | null {
       requireValid(m.role !== "user" || (m.text.trim().length > 0 && m.text.length <= MAX_MESSAGE_LENGTH));
       return { type: "message", message: {
         id: m.id, agentId: m.agentId, role: m.role, kind: m.kind, text: m.text, createdAt: m.createdAt,
-        clientMessageId: m.clientMessageId as string | undefined, pending: false, failed: false,
+        // A system notice cannot claim a user receipt's quote/correlation alias.
+        clientMessageId: m.role === "user" ? m.clientMessageId as string | undefined : undefined, pending: false, failed: false,
       } };
     }
     case "tool_activity": {

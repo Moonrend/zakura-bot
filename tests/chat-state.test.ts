@@ -71,7 +71,7 @@ test("conflicting user snapshots cannot rewrite pending or delivered message bod
   assert.equal(state.messagesByAgent.a[0].pending, true, "an invalid receipt is not delivery confirmation");
   state = chatReducer(state, { type: "message", message: echo });
   state = chatReducer(state, { type: "draft", agentId: "a", text: "Next draft" });
-  // A manual reconnect replaces the client's receipt cache, but keeps this transcript.
+  // Keep this transcript safe even if a replacement client has no receipt cache.
   state = chatReducer(state, { type: "connection", state: "connecting" });
   state = chatReducer(state, { type: "connection", state: "connected" });
   state = chatReducer(state, { type: "message", message: { ...echo, clientMessageId: undefined, text: "Corrupt replay" } });
@@ -80,6 +80,31 @@ test("conflicting user snapshots cannot rewrite pending or delivered message bod
   assert.equal(state.messagesByAgent.a[0].pending, false);
   assert.equal(state.messagesByAgent.a[0].serverId, "server");
   assert.equal(state.draftsByAgent.a, "Next draft");
+});
+
+test("replacement-client receipts cannot retarget existing user ids or reply aliases", () => {
+  let state = initial();
+  const user = (id: string): ChatMessage => ({ id, agentId: "a", role: "user", kind: "text", text: "Same body", createdAt: 10 });
+  state = chatReducer(state, { type: "optimistic", message: user("first") });
+  state = chatReducer(state, { type: "message", message: { ...user("server-first"), clientMessageId: "first" } });
+  state = chatReducer(state, { type: "optimistic", message: user("second") });
+  state = chatReducer(state, { type: "connection", state: "connecting" });
+  state = chatReducer(state, { type: "connection", state: "connected" });
+  const before = state;
+  for (const message of [
+    { ...user("server-first"), clientMessageId: "second" },
+    { ...user("different-server"), clientMessageId: "first" },
+    { ...user("server-first"), clientMessageId: "different-client" },
+  ]) {
+    assert.equal(chatReducer(state, { type: "message", message }), before, "conflicting ids must not confirm or reassign a user message");
+  }
+  // A new client's replay without a correlation field falls back to its server id.
+  state = chatReducer(state, { type: "message", message: { ...user("server-first"), clientMessageId: "server-first" } });
+  assert.equal(state.messagesByAgent.a[0].clientMessageId, "first");
+  assert.equal(state.messagesByAgent.a[0].serverId, "server-first");
+  assert.equal(state.messagesByAgent.a[1].failed, true);
+  state = chatReducer(state, { type: "message", message: { ...user("server-second"), clientMessageId: "second" } });
+  assert.equal(state.messagesByAgent.a[1].failed, false, "a valid late receipt still confirms delivery");
 });
 
 test("older tool updates neither replace the latest preview nor mark a conversation unread", () => {

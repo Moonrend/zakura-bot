@@ -21,9 +21,9 @@ Talks to [Zakura](https://github.com/Moonrend/Zakura) as a messaging channel —
 
 Sending from the composer brings the transcript back to the latest messages; incoming replies preserve your position while reading history. Jump to latest keeps keyboard focus in the transcript. Raw and Markdown streams show a cursor beside the arriving text. Unsupported file drops cannot navigate away from any app route. Mixed image/text paste keeps the text and explains that the image was not uploaded.
 
-Send and Stop use separate controls so a held key or pointer press cannot activate the other action when a turn changes. Focus returns to the draft when the focused action disappears. Long search queries stay within the sidebar's empty state.
+Send and Stop use separate controls so a held key or pointer press cannot activate the other action when a turn changes. Enter requires a fresh press before it can send the next draft. Focus returns to the draft when the focused action disappears. Long search queries and agent names stay within narrow empty states, and the composer keeps a short placeholder.
 
-On web, losing network connectivity immediately pauses the live channel. Coming online starts a fresh handshake, preserves drafts, and leaves message retries manual. Connection setup remains scrollable in short windows; switching to the desktop sidebar closes the mobile drawer.
+On web, losing network connectivity immediately pauses the live channel. Coming online starts a fresh handshake, preserves drafts, and leaves message retries manual. Both automatic and manual reconnect retain receipt identities; conflicting replay ids cannot confirm another message. Connection setup remains scrollable in short windows; switching to the desktop sidebar closes the mobile drawer.
 
 ## Requirements
 

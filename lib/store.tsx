@@ -197,7 +197,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [dispatch]);
 
-  const reconnect = useCallback(async () => bootClient(settingsRef.current), [bootClient]);
+  const reconnect = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client) { bootClient(settingsRef.current); return; }
+    // Keep idempotency keys and receipt aliases for this channel identity.
+    // Settings changes still create a new client and reset its scoped data.
+    client.disconnect();
+    try { await client.connect(); }
+    catch (error) {
+      if (clientRef.current === client) dispatch({ type: "connection", state: "error",
+        detail: error instanceof Error ? error.message : "Could not reconnect to the channel." });
+    }
+  }, [bootClient, dispatch]);
   const lastError = [...state.errors].reverse().find((error) => !error.agentId || error.agentId === state.selectedId) ?? null;
   const dismissError = useCallback(() => {
     const error = [...stateRef.current.errors].reverse().find((item) => !item.agentId || item.agentId === stateRef.current.selectedId);

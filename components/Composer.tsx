@@ -138,7 +138,7 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onContentSizeChange={Platform.OS === "web" ? undefined : (event) => setHeight(Math.max(44, event.nativeEvent.contentSize.height))}
-          placeholder={busy ? `Reply to ${agentName}…` : `Message ${agentName}`}
+          placeholder={busy ? "Next message…" : "Message…"}
           placeholderTextColor="#a3a3a3"
           accessibilityLabel={`Message ${agentName}`}
           accessibilityHint={offline ? "You can write a draft; sending is unavailable while offline." : hint}
@@ -150,7 +150,7 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
           submitBehavior="newline"
           onKeyPress={(event) => {
             if (Platform.OS !== "web") return;
-            const nativeEvent = event.nativeEvent as { key?: string; shiftKey?: boolean; isComposing?: boolean; keyCode?: number };
+            const nativeEvent = event.nativeEvent as { key?: string; shiftKey?: boolean; isComposing?: boolean; keyCode?: number; repeat?: boolean };
             if (nativeEvent.isComposing || nativeEvent.keyCode === 229) return;
             if (nativeEvent.key === "Escape") {
               event.preventDefault();
@@ -160,7 +160,9 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
             // Enter commits a CJK composition before it can submit a message.
             if (nativeEvent.key === "Enter" && !nativeEvent.shiftKey) {
               event.preventDefault();
-              void submit();
+              // A held Enter may outlast a running turn or reconnect. Require
+              // a fresh press before sending the draft when Send is enabled.
+              if (!nativeEvent.repeat) void submit();
             }
           }}
         />

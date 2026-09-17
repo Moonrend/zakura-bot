@@ -128,7 +128,7 @@ export function ChatPane() {
               replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
               retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"} onRetry={(id) => void retryMessage(id)} />)}
             {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
-              <TypingDots reducedMotion={reducedMotion} /><Text className="text-[12px] text-ink-secondary">{agent.name} is working…</Text>
+              <TypingDots reducedMotion={reducedMotion} /><Text className="min-w-0 flex-1 text-[12px] text-ink-secondary" numberOfLines={1}>{agent.name} is working…</Text>
             </View> : null}
           </ScrollView>
           {!pinned ? <Pressable onPress={() => {
@@ -177,7 +177,7 @@ function EmptyThread({ name, color, offline, disabled, onSuggest }: {
   return (
     <View className="flex-1 items-center justify-center px-4 py-12">
       <BlobAvatar color={color} name={name} size={64} />
-      <Text className="mt-5 text-[20px] font-semibold text-ink">{offline ? `${name} is offline` : `Say hello to ${name}`}</Text>
+      <Text className="mt-5 w-full text-center text-[20px] font-semibold text-ink" numberOfLines={2}>{offline ? `${name} is offline` : `Say hello to ${name}`}</Text>
       <Text className="mt-2 max-w-sm text-center text-[14px] leading-6 text-ink-secondary">
         {offline ? "You can write a draft here. Sending becomes available when this agent is online." : "A new conversation starts with a message."}
       </Text>

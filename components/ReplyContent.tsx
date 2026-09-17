@@ -12,6 +12,11 @@ function filename(url: string): string {
 /** Received files are links. Uploads and embedded media playback are not implemented. */
 export function ReplyContent({ message, replyTarget }: { message: ChatMessage; replyTarget?: ChatMessage }) {
   const card = message.card;
+  // Media and URL buttons are rendered below. A card containing only those
+  // links (or body text already shown above) does not need an empty body panel.
+  const hasCardBody = card && (card.title?.trim() || card.subtitle?.trim() ||
+    (card.text !== message.text && card.text?.trim()) || card.fields?.some((field) => field.label.trim() || field.value.trim()) ||
+    card.table?.headers.some((cell) => cell.trim()) || card.table?.rows.some((row) => row.some((cell) => cell.trim())));
   const links = [...(message.actions ?? []), ...(card?.links ?? [])];
   const images = [...(card?.images ?? []), ...(card?.imageUrl ? [{ url: card.imageUrl, alt: "Card image" }] : [])];
   const quote = replyTarget?.text?.trim() || replyTarget?.card?.title || replyTarget?.attachments?.[0]?.name || "Earlier message";
@@ -26,7 +31,7 @@ export function ReplyContent({ message, replyTarget }: { message: ChatMessage; r
       {empty && !message.streaming ? <Text className="text-[13px] leading-5 text-ink-secondary">
         {message.interrupted ? "Reply stopped before any text arrived." : "No reply content was received."}
       </Text> : null}
-      {card ? (
+      {card && hasCardBody ? (
         <View className="min-w-0 max-w-full gap-2 rounded-xl border border-hairline bg-inset p-3">
           {card.title ? <Text className="text-[15px] font-semibold text-ink" selectable>{card.title}</Text> : null}
           {card.subtitle ? <Text className="text-[12px] text-ink-secondary" selectable>{card.subtitle}</Text> : null}

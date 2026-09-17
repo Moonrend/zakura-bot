@@ -29,6 +29,16 @@ test("user receipts respect the same nonempty text limit as inbound messages", (
   }
 });
 
+test("system notices preserve their text without claiming user receipt aliases", () => {
+  const frame = decodeServerFrame(JSON.stringify({ type: "message", message: {
+    id: "notice", agentId: "a", role: "system", kind: "system", text: "Delivery queued", createdAt: 1, clientMessageId: "user-1",
+  } }));
+  assert.equal(frame?.type, "message");
+  if (frame?.type !== "message") return;
+  assert.equal(frame.message.text, "Delivery queued");
+  assert.equal(frame.message.clientMessageId, undefined);
+});
+
 test("chat_reply normalizes raw text, quotes, attachments, cards and links", () => {
   const decoded = decodeServerFrame(JSON.stringify({ type: "chat_reply", agentId: "a", messageId: "r1", createdAt: 100,
     payload: { text: "**literal**", kind: "raw", reply_to: "u1",
@@ -676,4 +686,23 @@ test("receipt ids cannot be reassigned and aliases are scoped to roster access",
   socket.frame({ type: "agents", agents });
   socket.frame({ type: "message", message: { ...message, clientMessageId: "new-local", text: "New access" } });
   assert.equal(events.filter((event) => event.type === "message").length, 3, "revocation drops the old receipt aliases");
+});
+
+test("socket errors cancel delivery and interrupt deadlines while awaiting the close code", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 100, interruptTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  await client.sendMessage({ agentId: "a", clientMessageId: "pending", text: "Keep this message" });
+  socket.frame({ type: "typing", agentId: "b", active: true });
+  await client.interrupt("b");
+  t.mock.timers.tick(99);
+  socket.onerror?.();
+  const count = events.length;
+  t.mock.timers.tick(500);
+  assert.equal(events.length, count, "settled operations must not emit timeouts during the close grace period");
+  socket.remoteClose(4401);
+  t.mock.timers.tick(5000);
+  assert.equal(sockets.length, 1, "the authentication close remains terminal");
+  assert.match(JSON.stringify(events.at(-1)), /Authentication failed/);
 });
