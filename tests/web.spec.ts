@@ -16,6 +16,53 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("tool updates that remove details preserve transcript navigation and leave focused drafts alone", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false,
+  })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  const transcript = page.getByTestId("chat-transcript");
+  await input.fill("Keep the next draft");
+  const updateTool = (id: string, detail?: string, ok?: boolean) => channel!.send(JSON.stringify({
+    type: "tool_activity", agentId: "live", message: { id, agentId: "live", role: "assistant", kind: "activity",
+      createdAt: 1, tool: { name: "search", detail, ok } },
+  }));
+  for (const [index, detail] of [undefined, "", " \n\t "].entries()) {
+    const id = `tool-${index}`;
+    updateTool(id, "Read these details");
+    const row = page.getByTestId(`transcript-row-${id}`);
+    const chip = row.getByRole("button", { name: "Tool search, Running", exact: true });
+    await chip.press("Enter");
+    await expect(chip).toHaveAttribute("aria-expanded", "true");
+    await expect(row.getByText("Read these details", { exact: true })).toBeVisible();
+    updateTool(id, detail, true);
+    await expect(row.getByRole("button")).toHaveCount(0);
+    await expect(row.getByTestId("message-text")).toHaveCount(0);
+    await expect(transcript).toBeFocused();
+    await expect(input).toHaveValue("Keep the next draft");
+  }
+
+  updateTool("background", "Keep useful indentation\n  in tool output");
+  const row = page.getByTestId("transcript-row-background");
+  await row.getByRole("button", { name: "Tool search, Running", exact: true }).click();
+  await expect(row.getByTestId("message-text")).toHaveText("Keep useful indentation\n  in tool output", { useInnerText: true });
+  await input.focus();
+  updateTool("background", undefined, true);
+  await expect(row.getByRole("button")).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep the next draft");
+  await accessible(page);
+});
+
 test("successful reconnect removes stale channel warnings while failed sends remain retryable", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   let connections = 0;

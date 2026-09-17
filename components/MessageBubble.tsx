@@ -27,7 +27,8 @@ export function MessageBubble({ message, replyTarget, onRetry, onFocusLost, retr
       document.activeElement === (retryRef.current as unknown as HTMLElement)) onFocusLost?.();
     retryRef.current = node;
   }, [onFocusLost]);
-  if (message.kind === "activity" && message.tool) return <ActivityChip tool={message.tool} reducedMotion={reducedMotion} onExpand={onExpandDetails} />;
+  if (message.kind === "activity" && message.tool) return <ActivityChip tool={message.tool} reducedMotion={reducedMotion}
+    onExpand={onExpandDetails} onFocusLost={onFocusLost} />;
   if (message.kind === "system") return <View className="my-2 min-w-0 items-center"><Text testID="message-text"
     className="max-w-full text-[12px] text-ink-secondary" selectable>{message.text}</Text></View>;
   const user = message.role === "user";
