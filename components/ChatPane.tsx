@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { ArrowDown, Menu, MessageCircle, Settings } from "lucide-react-native";
 import { useRouter } from "expo-router";
@@ -14,7 +14,7 @@ import type { ChatMessage } from "@/lib/types";
 
 const SUGGESTIONS = ["Say hello", "How do settings work?", "Run a slow reply", "help"];
 
-export function ChatPane() {
+export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View> }) {
   const { agents, selectedId, messagesByAgent, typing, setSidebarOpen, retryMessage, send, connection, transportLabel } = useStore();
   const agent = agents.find((item) => item.id === selectedId);
   const messages = messagesByAgent[selectedId] ?? [];
@@ -88,7 +88,7 @@ export function ChatPane() {
     <KeyboardAvoidingView className="min-w-0 flex-1 bg-app" behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}>
       <View className="flex-row items-center gap-2.5 border-b border-hairline/60 px-4 pb-3"
         style={{ paddingTop: Math.max(insets.top, 12) }}>
-        {compact ? <Pressable onPress={() => setSidebarOpen(true)} className="-ml-2 h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
+        {compact ? <Pressable ref={agentListButtonRef} onPress={() => setSidebarOpen(true)} className="-ml-2 h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
           accessibilityRole="button" accessibilityLabel="Open agent list"><Menu size={21} color="#fcfcfc" /></Pressable> : null}
         {agent ? <BlobAvatar color={agent.color} name={agent.name} size={34} /> : <MessageCircle size={28} color="#459ffe" />}
         <View className="min-w-0 flex-1">

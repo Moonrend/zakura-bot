@@ -16,6 +16,123 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("responsive sidebar transitions retain filters and restore navigation focus", async ({ page }) => {
+  await mockReady(page);
+  const search = page.getByRole("textbox", { name: "Search agents", exact: true });
+  await search.fill("Research");
+  const unread = page.getByRole("button", { name: /^Unread conversations/ });
+  await unread.click();
+  await search.focus();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const open = page.getByRole("button", { name: "Open agent list", exact: true });
+  await expect(open).toBeFocused();
+  await open.press("Enter");
+  await expect(search).toHaveValue("Research");
+  await expect(unread).toHaveAttribute("aria-pressed", "true");
+  await expect(agent(page, "Research")).toBeVisible();
+  await search.focus();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const list = page.getByRole("region", { name: "Agent list", exact: true });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(list).toBeFocused();
+  await expect(search).toHaveValue("Research");
+  await expect(unread).toHaveAttribute("aria-pressed", "true");
+
+  const input = page.getByRole("textbox", { name: "Message Zakura", exact: true });
+  await input.fill("Keep the draft and its focus while resizing");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep the draft and its focus while resizing");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await open.focus();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await expect(list).toBeFocused();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(open).toBeFocused();
+  await open.press("Enter");
+  await expect(search).toHaveValue("Research");
+  await page.keyboard.press("Escape");
+  await expect(open).toBeFocused();
+  await open.press("Enter");
+  await expect(search).toHaveValue("Research");
+  await expect(unread).toHaveAttribute("aria-pressed", "true");
+  await noOverflow(page);
+  await accessible(page);
+});
+
+test("inline code containing backticks never activates its Markdown links", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep the next draft");
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "inline-code", createdAt: 1,
+    streaming: true, payload: { text: "Use `` `[Literal](https://example.com)` `` then " } }));
+  const reply = page.getByTestId("message-inline-code");
+  await expect(reply).toContainText("Use `[Literal](https://example.com)` then");
+  await expect(reply.getByRole("link")).toHaveCount(0);
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "inline-code",
+    delta: "[Docs](https://example.com/guide_(one))." }));
+  await expect(reply.getByRole("link")).toHaveCount(1);
+  await expect(reply.getByRole("link", { name: "Docs, opens in browser", exact: true }))
+    .toHaveAttribute("href", "https://example.com/guide_(one)");
+  channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "inline-code" }));
+  const partial = "Use `` [Pending](https://example.com) `tick`";
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "pending-code", createdAt: 2,
+    streaming: true, payload: { text: partial } }));
+  const pending = page.getByTestId("message-pending-code");
+  await expect(pending).toContainText(partial);
+  await expect(pending.getByRole("link")).toHaveCount(0);
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "pending-code",
+    delta: " `` then [Docs](https://example.com)." }));
+  await expect(pending).toContainText("Use [Pending](https://example.com) `tick` then Docs.");
+  await expect(pending.getByRole("link")).toHaveCount(1);
+  await expect(pending.getByRole("link", { name: "Docs, opens in browser", exact: true })).toBeVisible();
+  channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "pending-code" }));
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep the next draft");
+});
+
+test("invalid reply payloads stay in their conversation and revoked backfill cannot create global errors", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  const roster = [{ id: "alpha", name: "Alpha", status: "idle" }, { id: "beta", name: "Beta", status: "idle" }];
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: roster }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  await agent(page, "Beta").click();
+  const input = page.getByRole("textbox", { name: "Message Beta", exact: true });
+  await input.fill("Keep this draft");
+  const invalidReply = { type: "chat_reply", agentId: "alpha", messageId: "bad", createdAt: 1,
+    payload: { attachments: ["/workspace/private-file.txt"] } };
+  channel!.send(JSON.stringify(invalidReply));
+  // A following valid frame makes the absence assertion independent of frame timing.
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "beta", messageId: "good", createdAt: 2, payload: { text: "Beta is ready" } }));
+  await expect(page.getByTestId("message-good")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await agent(page, "Alpha").click();
+  await expect(page.getByRole("alert")).toContainText("Invalid channel frame");
+  await agent(page, "Beta").click();
+  channel!.send(JSON.stringify({ type: "agents", agents: [roster[1]] }));
+  channel!.send(JSON.stringify(invalidReply));
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "beta", messageId: "after-revocation", createdAt: 3, payload: { text: "Beta is still ready" } }));
+  await expect(page.getByTestId("message-after-revocation")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(input).toHaveValue("Keep this draft");
+});
+
 test("streaming code fences preserve embedded backticks and complete links keep balanced parentheses", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {

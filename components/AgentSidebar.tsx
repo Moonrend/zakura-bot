@@ -12,19 +12,22 @@ const CONNECTION_DOT = { connected: "bg-success", connecting: "bg-warning", erro
 const STATUS_DOT = { idle: "bg-success", busy: "bg-warning", offline: "bg-ink-secondary" };
 const STATUS_LABEL = { idle: "Available", busy: "Working", offline: "Offline" };
 
-export function AgentSidebar() {
+export function AgentSidebar({ query, setQuery, unreadOnly, setUnreadOnly }: {
+  query: string;
+  setQuery: (query: string) => void;
+  unreadOnly: boolean;
+  setUnreadOnly: (unreadOnly: boolean) => void;
+}) {
   const { agents, selectedId, selectAgent, messagesByAgent, draftsByAgent, typing, connection, transportLabel, setSidebarOpen } = useStore();
   const router = useRouter();
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const compact = width < 768;
   const pinSearch = height >= 400;
-  const [query, setQuery] = useState("");
   const searchRef = useRef<TextInput>(null);
   const listRef = useRef<ScrollView>(null);
   const [searchHeight, setSearchHeight] = useState(0);
   const unreadFilterRef = useRef<View>(null);
-  const [unreadOnly, setUnreadOnly] = useState(false);
   const unreadCount = agents.filter((agent) => agent.unread).length;
   const visible = useMemo(() => {
     const value = query.trim().toLocaleLowerCase();

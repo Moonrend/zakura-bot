@@ -12,6 +12,14 @@ export class UnsupportedChannelProtocolError extends Error {
   }
 }
 
+/** Retain only validated envelope ids so invalid content stays conversation-scoped. */
+export class InvalidChannelFrameError extends Error {
+  constructor(readonly frameType?: string, readonly agentId?: string) {
+    super("Invalid channel frame from Zakura.");
+    this.name = "InvalidChannelFrameError";
+  }
+}
+
 export type ServerFrame =
   | { type: "ready"; protocol: number; agents: Agent[] }
   | { type: "chat_reply"; message: ChatMessage }
@@ -24,7 +32,7 @@ function record(value: unknown): value is RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function requireValid(value: unknown): asserts value {
-  if (!value) throw new Error("Invalid channel frame from Zakura.");
+  if (!value) throw new InvalidChannelFrameError();
 }
 export function isChannelId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= 256 &&
@@ -168,6 +176,16 @@ export function decodeServerFrame(raw: string): ServerFrame | null {
   let frame: unknown;
   try { frame = JSON.parse(raw); } catch { throw new Error("Malformed JSON from Zakura."); }
   requireValid(record(frame) && typeof frame.type === "string");
+  try { return decodeFrame(frame); }
+  catch (error) {
+    if (!(error instanceof InvalidChannelFrameError)) throw error;
+    const agentId = frame.type === "message" ? record(frame.message) ? frame.message.agentId : undefined
+      : ["chat_reply", "message_delta", "message_done", "tool_activity", "typing", "error"].includes(frame.type) ? frame.agentId : undefined;
+    throw new InvalidChannelFrameError(frame.type, id(agentId) ? agentId : undefined);
+  }
+}
+
+function decodeFrame(frame: RecordValue): ServerFrame | null {
   switch (frame.type) {
     case "ready":
       requireValid(typeof frame.protocol === "number" && Number.isSafeInteger(frame.protocol));

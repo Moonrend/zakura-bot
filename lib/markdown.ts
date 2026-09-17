@@ -34,16 +34,42 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
 }
 
 /** The supported inline subset never interprets HTML or unfinished delimiters. */
-export function parseInlineMarkdown(line: string): MarkdownSpan[] {
+export function parseInlineMarkdown(line: string, streaming = false): MarkdownSpan[] {
+  // Code delimiters are whole runs, so a single backtick inside double
+  // backticks cannot expose a link. Index matching runs once rather than
+  // repeatedly scanning a long, unfinished stream for each possible closer.
+  const backticks = [...line.matchAll(/`+/g)];
+  const nextByLength = new Map<number, number>();
+  const codeEnds = new Map<number, number>();
+  for (let index = backticks.length - 1; index >= 0; index--) {
+    const run = backticks[index];
+    const next = nextByLength.get(run[0].length);
+    if (next !== undefined) codeEnds.set(run.index, next);
+    nextByLength.set(run[0].length, run.index);
+  }
   // Excluding nested '[' prevents repeated scans of unfinished streaming labels.
-  const token = /\*\*[^*]+\*\*|`[^`]+`|\[([^\[\]]+)\]\(https?:\/\//gi;
+  const token = /`+|\*\*[^*]+\*\*|\[([^\[\]]+)\]\(https?:\/\//gi;
   const spans: MarkdownSpan[] = [];
   let offset = 0;
   let match: RegExpExecArray | null;
   while ((match = token.exec(line))) {
     let end = token.lastIndex;
     let span: MarkdownSpan;
-    if (match[1] !== undefined) {
+    if (match[0][0] === "`") {
+      const closing = codeEnds.get(match.index);
+      if (closing === undefined) {
+        // A delimiter still arriving can turn this tail into code. Keep its
+        // source visible without temporarily activating links inside it.
+        if (streaming) break;
+        continue;
+      }
+      let text = line.slice(end, closing);
+      // Markdown removes one padding space around nonblank code, allowing
+      // literal backticks at either edge without changing deliberate spacing.
+      if (text.startsWith(" ") && text.endsWith(" ") && /[^ ]/.test(text)) text = text.slice(1, -1);
+      span = { kind: "code", text };
+      end = closing + match[0].length;
+    } else if (match[1] !== undefined) {
       let depth = 1;
       let cursor = end;
       for (; cursor < line.length; cursor++) {
@@ -60,8 +86,7 @@ export function parseInlineMarkdown(line: string): MarkdownSpan[] {
       const urlStart = match.index + match[1].length + 3;
       span = { kind: "link", text: match[1], url: line.slice(urlStart, cursor).replace(/\\([\\()])/g, "$1") };
     } else {
-      const strong = match[0].startsWith("**");
-      span = { kind: strong ? "strong" : "code", text: match[0].slice(strong ? 2 : 1, strong ? -2 : -1) };
+      span = { kind: "strong", text: match[0].slice(2, -2) };
     }
     if (match.index > offset) spans.push({ kind: "text", text: line.slice(offset, match.index) });
     spans.push(span);

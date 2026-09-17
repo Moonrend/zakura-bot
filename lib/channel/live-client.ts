@@ -9,7 +9,7 @@
  */
 import { version } from "../../package.json";
 import type { Agent, ChatMessage } from "../types";
-import { decodeServerFrame, isChannelId, PROTOCOL_VERSION, UnsupportedChannelProtocolError } from "./protocol";
+import { decodeServerFrame, InvalidChannelFrameError, isChannelId, PROTOCOL_VERSION, UnsupportedChannelProtocolError } from "./protocol";
 import {
   ChannelEmitter, MAX_MESSAGE_LENGTH, uid,
   type ChannelConnectionState, type ChannelListener,
@@ -275,7 +275,15 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     let frame;
     try { frame = decodeServerFrame(raw); } catch (error) {
       if (error instanceof UnsupportedChannelProtocolError) this.fail(error.message, false);
-      else this.emitter.emit({ type: "error", message: (error as Error).message });
+      else {
+        const invalid = error instanceof InvalidChannelFrameError ? error : undefined;
+        const agentId = invalid?.agentId;
+        // Malformed data follows the same authentication/roster gate as valid
+        // data. A revoked conversation's backfill cannot create global errors.
+        if (agentId && (this.state !== "connected" || !this.roster.has(agentId))) return;
+        if (this.state !== "connected" && invalid?.frameType && !["ready", "error"].includes(invalid.frameType)) return;
+        this.emitter.emit({ type: "error", message: (error as Error).message, ...(agentId ? { agentId } : {}) });
+      }
       return;
     }
     if (!frame) return;

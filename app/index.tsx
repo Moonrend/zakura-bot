@@ -1,14 +1,40 @@
-import { useCallback, useEffect } from "react";
-import { ActivityIndicator, Modal, View, useWindowDimensions, Pressable } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Modal, Platform, View, useWindowDimensions, Pressable } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { AgentSidebar } from "@/components/AgentSidebar";
 import { ChatPane } from "@/components/ChatPane";
 import { useStore } from "@/lib/store";
+import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 768;
   const { sidebarOpen, setSidebarOpen, settingsReady, setThreadVisible } = useStore();
+  // The desktop sidebar and modal have different lifetimes. Keep the user's
+  // filters with the screen so resizing or reopening the drawer retains them.
+  const [query, setQuery] = useState("");
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const filters = { query, setQuery, unreadOnly, setUnreadOnly };
+  const desktopSidebarRef = useRef<View | null>(null);
+  const agentListButtonRef = useRef<View | null>(null);
+  const restoreSidebarFocus = useCallback(() => {
+    if (Platform.OS !== "web") return;
+    const sidebar = desktopSidebarRef.current as unknown as HTMLElement | null;
+    const list = sidebar?.querySelector<HTMLElement>('[role="region"][aria-label="Agent list"]');
+    const menu = agentListButtonRef.current as unknown as HTMLElement | null;
+    (list ?? menu)?.focus({ preventScroll: true });
+  }, []);
+  const setDesktopRemovalRef = useFocusOnRemoval(restoreSidebarFocus);
+  const setDrawerRemovalRef = useFocusOnRemoval(restoreSidebarFocus);
+  const setMenuRemovalRef = useFocusOnRemoval(restoreSidebarFocus);
+  const setDesktopSidebarRef = useCallback((node: View | null) => {
+    setDesktopRemovalRef(node);
+    desktopSidebarRef.current = node;
+  }, [setDesktopRemovalRef]);
+  const setAgentListButtonRef = useCallback((node: View | null) => {
+    setMenuRemovalRef(node);
+    agentListButtonRef.current = node;
+  }, [setMenuRemovalRef]);
 
   useEffect(() => {
     // The desktop sidebar replaces the drawer; do not reopen an old drawer
@@ -30,21 +56,21 @@ export default function HomeScreen() {
   return (
     <View className="flex-1 flex-row bg-app">
       {!compact ? (
-        <View className="w-80 shrink-0">
-          <AgentSidebar />
+        <View ref={setDesktopSidebarRef} className="w-80 shrink-0">
+          <AgentSidebar {...filters} />
         </View>
       ) : null}
       <View className="min-w-0 flex-1" accessibilityElementsHidden={compact && sidebarOpen}
         importantForAccessibility={compact && sidebarOpen ? "no-hide-descendants" : "auto"}>
-        <ChatPane />
+        <ChatPane agentListButtonRef={setAgentListButtonRef} />
       </View>
       <Modal transparent visible={compact && sidebarOpen} animationType="none"
         onRequestClose={() => setSidebarOpen(false)} statusBarTranslucent>
         <View className="flex-1" accessibilityViewIsModal>
           <Pressable className="absolute inset-0 bg-black/60" onPress={() => setSidebarOpen(false)}
             accessible={false} focusable={false} />
-          <View className="h-full" style={{ width: Math.min(320, Math.max(240, width - 48)) }}>
-            <AgentSidebar />
+          <View ref={setDrawerRemovalRef} className="h-full" style={{ width: Math.min(320, Math.max(240, width - 48)) }}>
+            <AgentSidebar {...filters} />
           </View>
         </View>
       </Modal>

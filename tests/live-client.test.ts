@@ -337,6 +337,37 @@ test("connect is idempotent and authentication gates roster and message events",
   assert.equal(events.filter((event) => event.type === "agents").length, 1);
 });
 
+test("malformed conversation data is scoped after authentication and ignored after roster revocation", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect();
+  const socket = sockets[0]; socket.open();
+  const invalidReply = { type: "chat_reply", agentId: "a", messageId: "bad", createdAt: 1,
+    payload: { attachments: ["/workspace/private-file.txt"] } };
+  socket.frame(invalidReply);
+  assert.equal(events.some((event) => event.type === "error"), false, "pre-ready data cannot leave an error in the next conversation");
+  socket.frame({ type: "ready", protocol: 1, agents: null, agentId: "a" });
+  assert.deepEqual(events.at(-1), { type: "error", message: "Invalid channel frame from Zakura." }, "a handshake error has no conversation scope");
+  socket.ready();
+  socket.frame(invalidReply);
+  assert.deepEqual(events.at(-1), { type: "error", agentId: "a", message: "Invalid channel frame from Zakura." });
+  await client.sendMessage({ agentId: "b", clientMessageId: "bad-user", text: "Expected body" });
+  socket.frame({ type: "message", message: { id: "bad-user", agentId: "b", role: "user", kind: "text", text: "", createdAt: 1 } });
+  assert.deepEqual(events.at(-1), { type: "error", agentId: "b", message: "Invalid channel frame from Zakura." });
+  t.mock.timers.tick(100);
+  assert.deepEqual(events.at(-1), { type: "error", agentId: "b", clientMessageId: "bad-user", turnEnded: false,
+    message: "Delivery was not confirmed. Retry this message to check or resend it." }, "an invalid receipt leaves delivery unconfirmed and retryable");
+  socket.frame({ type: "agents", agents: [agents[1]] });
+  const count = events.length;
+  socket.frame(invalidReply);
+  socket.frame({ type: "message", message: { id: "old-user", agentId: "a", role: "user", kind: "text", text: "", createdAt: 1 } });
+  assert.equal(events.length, count, "malformed backfill from a revoked agent must also be ignored");
+  socket.raw("not json");
+  assert.deepEqual(events.at(-1), { type: "error", message: "Malformed JSON from Zakura." });
+  assert.equal(client.getConnectionState(), "connected");
+});
+
 test("only announced chat_reply messages accept deltas, and late tokens are ignored", async (t) => {
   const { client, sockets, events } = liveHarness();
   t.after(() => client.disconnect());

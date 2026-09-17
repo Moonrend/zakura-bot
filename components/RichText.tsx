@@ -17,8 +17,9 @@ export function RichText({ text, streaming, raw = false }: { text: string; strea
         </View>
       ) : (
         <Text key={index} testID="message-text" className="text-[15px] leading-[22px] text-ink" selectable>
-          {block.text.split("\n").map((line, lineIndex) => (
-            <Text key={lineIndex}>{lineIndex ? "\n" : null}{renderInline(line.replace(/^[-*] /, "• "))}</Text>
+          {block.text.split("\n").map((line, lineIndex, lines) => (
+            <Text key={lineIndex}>{lineIndex ? "\n" : null}{renderInline(line.replace(/^[-*] /, "• "),
+              !!streaming && index === blocks.length - 1 && lineIndex === lines.length - 1)}</Text>
           ))}
           {streaming && index === blocks.length - 1 ? <StreamingCursor /> : null}
         </Text>
@@ -32,8 +33,8 @@ function StreamingCursor() {
   return <Text aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="text-accent-border">▍</Text>;
 }
 
-function renderInline(line: string) {
-  return parseInlineMarkdown(line).map((span, index) => {
+function renderInline(line: string, streaming = false) {
+  return parseInlineMarkdown(line, streaming).map((span, index) => {
     if (span.kind === "strong") return <Text key={index} className="font-semibold">{span.text}</Text>;
     if (span.kind === "code") return <Text key={index} className="bg-inset font-mono text-[13px] text-ink">{span.text}</Text>;
     if (span.kind === "link") return <ExternalLink key={index} label={span.text} url={span.url} />;
