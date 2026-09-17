@@ -134,6 +134,45 @@ test("reply updates preserve the focused link through reordering and restore tra
   await accessible(page);
 });
 
+test("removing a focused reply table restores transcript navigation and preserves the next draft", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep the next draft");
+  const transcript = page.getByTestId("chat-transcript");
+  const table = page.getByRole("region", { name: "Card table", exact: true });
+  const update = (card?: object) => channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live",
+    messageId: "report", createdAt: 1, payload: { text: "Report", card } }));
+  const report = { title: "Results", table: { headers: ["Task", "Status", "Notes"], rows: [["Review", "Done", "Ready"]] } };
+  for (const replacement of [{ title: "Updated results" }, undefined]) {
+    update(report);
+    await table.focus();
+    await table.press("ArrowRight");
+    await expect.poll(() => table.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    update(replacement);
+    await expect(table).toHaveCount(0);
+    await expect(transcript).toBeFocused();
+    await expect(input).toHaveValue("Keep the next draft");
+  }
+  update(report);
+  await expect(table).toHaveCount(1);
+  await input.focus();
+  update();
+  await expect(table).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await noOverflow(page);
+  await accessible(page);
+});
+
 for (const width of [1440, 320]) test(`earlier history loads in pages without losing quotes, reading position or keyboard focus (${width}px)`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 });
   let channel: WebSocketRoute | undefined;

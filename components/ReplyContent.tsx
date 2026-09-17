@@ -1,6 +1,8 @@
+import { useCallback } from "react";
 import { Platform, ScrollView, Text, View } from "react-native";
 import { Paperclip } from "lucide-react-native";
 import type { ChatMessage, MessageLink } from "@/lib/types";
+import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { ExternalLink } from "./ExternalLink";
 import { RichText } from "./RichText";
 
@@ -23,6 +25,11 @@ function keyedLinks(links: MessageLink[]) {
 export function ReplyContent({ message, replyTarget, onFocusLost }: {
   message: ChatMessage; replyTarget?: ChatMessage; onFocusLost?: () => void;
 }) {
+  const setTableRemovalRef = useFocusOnRemoval<HTMLElement>(onFocusLost);
+  const setTableRef = useCallback((node: ScrollView | null) => {
+    // ScrollView exposes a component ref; focus belongs to its scrollable node.
+    if (Platform.OS === "web") setTableRemovalRef(node?.getScrollableNode() ?? null);
+  }, [setTableRemovalRef]);
   const card = message.card;
   // Media and URL buttons are rendered below. A card containing only those
   // links (or body text already shown above) does not need an empty body panel.
@@ -55,7 +62,7 @@ export function ReplyContent({ message, replyTarget, onFocusLost }: {
             <Text className="text-[11px] text-ink-secondary">{field.label}</Text>
             <Text testID="message-text" className="text-[13px] text-ink" selectable>{field.value}</Text>
           </View>)}
-          {card.table ? <ScrollView horizontal className="max-w-full" accessibilityLabel="Card table"
+          {card.table ? <ScrollView ref={setTableRef} horizontal className="max-w-full" accessibilityLabel="Card table"
             role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}>
             <View role={Platform.OS === "web" ? "table" : undefined} accessibilityLabel="Reply table">
               {card.table.headers.length ? <View role={Platform.OS === "web" ? "row" : undefined} className="flex-row border-b border-hairline">
