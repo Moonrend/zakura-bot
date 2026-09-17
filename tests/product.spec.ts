@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { createHash } from "node:crypto";
 
 test("groups retain names, order and bot membership after reload", async ({ page }) => {
   await page.goto("/");
@@ -63,17 +64,23 @@ test("bot manager shows binding details and starts, stops and resets a server se
 
 test("first launch authorizes in Zakura, persists only metadata locally, switches instances and signs out", async ({ page, context }) => {
   let identity = 0;
+  const challenges = new Map<number, string>();
   const revoked: string[] = [];
   await context.route("**/console/zakurabot/authorize*", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Confirm the device code in Zakura</h1>" }));
   await page.route("**/api/zakurabot/oauth/*", async (route) => {
     const operation = route.request().url().split("/").pop();
     if (operation === "device-code") {
       identity += 1;
+      const input = route.request().postDataJSON();
+      expect(input.code_challenge_method).toBe("S256");
+      expect(input.code_challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      challenges.set(identity, input.code_challenge);
       const origin = new URL(route.request().url()).origin;
       return route.fulfill({ json: { device_code: `device-${identity}`, user_code: "AB123-CD456", interval: 1, expires_in: 600,
         verification_uri: `${origin}/console/zakurabot/authorize`, verification_uri_complete: `${origin}/console/zakurabot/authorize?user_code=AB123-CD456` } });
     }
     if (operation === "revoke") { revoked.push(route.request().postDataJSON().token); return route.fulfill({ json: { ok: true } }); }
+    expect(createHash("sha256").update(route.request().postDataJSON().code_verifier).digest("base64url")).toBe(challenges.get(identity));
     return route.fulfill({ json: { access_token: `access-${identity}`, refresh_token: `refresh-${identity}`, expires_in: 1800,
       refresh_expires_at: new Date(Date.now() + 86400000).toISOString(), device: { id: `device-${identity}`, name: "Browser", bindingIds: [`binding-${identity}`] },
       tenant: { id: `tenant-${identity}`, name: identity === 1 ? "Work" : "Personal" } } });

@@ -9,7 +9,7 @@ A cross-platform Zakura client for iOS, Android and web. Connect your own instan
 | Zakura login | **Implemented**: browser device authorization, tenant binding consent, rotating refresh credentials, native SecureStore, logout and multiple instances |
 | Bot / Agent management | **Implemented**: authorized roster, binding/profile details, selection, start/stop and fresh sessions |
 | Sidebar groups | **Implemented**: create, rename, sort, assign bots and persist per instance on this device |
-| Send files | Planned: image/file picker, uploads and attachment cards |
+| Send files | **Implemented**: photo/file picker, paste/drop on web, uploads with retry, attachment-only sends, image previews and authenticated downloads |
 | View desktop | Planned: latest workspace screenshot and refresh |
 | Special messages | Existing: tool activity, errors, system notices, quotes and cards; interactive approval/question support next |
 
@@ -30,6 +30,10 @@ Access credentials refresh every 30 minutes without changing the device or its h
 Open **Manage bots** in the sidebar or **Bot details** in a conversation. Select an authorized bot, start its session, stop a running turn, or choose **New session** for fresh model context. The transcript keeps earlier messages. Bots and platform bindings are created in Zakura; **Authorize bots** opens another device authorization to choose bindings.
 
 Open **Groups** in the sidebar to create or rename sections, move them up/down, and place bots in a section. Deleting a section returns its bots to Ungrouped. Group layouts persist locally for each saved instance; cloud synchronization is not implemented.
+
+In a connected bot conversation, tap **+ → Photos / Files**, or paste/drop files on web. The bot must have filesystem access enabled in Zakura. Upload up to 8 nonempty files, each at most 16 MiB; wait for **Ready to send**, optionally add text, then Send. Uploads stay with their bot when switching conversations and can be retried or removed. Tap an attachment to preview supported images or **Download** (the native share/save sheet on iOS and Android). Device credentials stay in request headers, including downloads. Unsent file drafts are held in memory and clear on reload or instance switch.
+
+Login supports the server's S256 proof key and separate API/browser authorization hosts. Deploy the matching server branch for uploads and the extended device APIs.
 
 ## Requirements
 
@@ -80,9 +84,13 @@ npm test
 npm run export:web
 npx playwright install chromium  # first browser-test run
 npm run test:web
+# Optional: check the actual sibling Zakura server, with its dependencies installed
+ZAKURA_SERVER_PATH=../Zakura npm run test:integration
 ```
 
 Browser checks cover product workflows and chat delivery, including device login, instance switching, logout and reconnection. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
+
+The cross-repository integration check starts Zakura's HTTP/WebSocket server with PGlite and a controlled runtime, then drives it with this app's live client. It verifies file delivery to the agent workspace, authenticated downloads and retry deduplication without external model credentials.
 
 The mock follows the live client's message-id and text validation. Reusing an accepted id returns its original receipt without restarting a reply, including after Stop or reconnect. Interrupted mock handshakes and receipt listeners cannot start output on a replacement connection.
 

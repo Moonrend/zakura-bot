@@ -37,7 +37,9 @@
           "resizeMode": "contain",
           "backgroundColor": "#070707"
         }
-      ]
+      ],
+      "expo-sharing",
+      ["expo-image-picker", { "photosPermission": "Choose photos to send to your Zakura bot.", "cameraPermission": false, "microphonePermission": false }]
     ],
     "experiments": {
       "typedRoutes": true

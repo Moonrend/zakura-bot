@@ -22,9 +22,13 @@ export interface MessageLink {
 }
 
 export interface MessageAttachment {
+  /** Uploaded file identity. Download through the current device's scoped API. */
+  id?: string;
   /** Resolved by the platform adapter; workspace paths never reach the client. */
   url: string;
   name?: string;
+  mime?: string;
+  size?: number;
   type?: "image" | "file" | "audio" | "video";
 }
 

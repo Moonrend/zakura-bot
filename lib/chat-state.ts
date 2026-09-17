@@ -1,6 +1,7 @@
 import type { Agent, ChatMessage } from "./types";
 import type { ChannelConnectionState, ChannelEvent } from "./channel/types";
 import { messageContentPreview } from "./message-preview";
+import { attachmentIdentity } from "./files";
 
 export interface ChannelError {
   message: string;
@@ -87,7 +88,7 @@ function putMessage(state: ChatState, incoming: ChatMessage): ChatState {
   // accept that fallback without replacing the original optimistic alias.
   if (previous?.role === "user") {
     const serverId = previous.serverId ?? (!previous.pending && !previous.failed ? previous.id : undefined);
-    if (previous.text !== incoming.text ||
+    if (previous.text !== incoming.text || attachmentIdentity(previous.attachments) !== attachmentIdentity(incoming.attachments) ||
       (serverId && incoming.id !== serverId && incoming.id !== previous.id) ||
       (incoming.clientMessageId && !ownsId(previous, incoming.clientMessageId))) return state;
   }

@@ -8,11 +8,14 @@ import { DEMO_AGENTS } from "./channel/mock-client";
 import { MAX_MESSAGE_LENGTH } from "./channel/types";
 import { chatReducer, emptyChatState, isAgentWorking, previewFromMessages, type ChatAction, type ChannelError } from "./chat-state";
 import { loadSettings, saveSettings, loadProfiles, saveProfile, readCredentials, writeCredentials, removeProfile } from "./settings";
-import { CredentialSession, credentialsFromToken, instanceUrl, refreshAuthorization, revokeAuthorization, zakuraRequest,
-  type InstanceProfile, type TokenResponse } from "./auth";
-import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type BotSession } from "./types";
+import { CredentialSession, credentialsFromToken, instanceUrl, refreshAuthorization, revokeAuthorization, zakuraRequest, zakuraBinaryRequest,
+  type InstanceProfile, type TokenResponse, type ZakuraBinary } from "./auth";
+import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type BotSession, type MessageAttachment } from "./types";
 import { emptyGroups, reduceGroups, type BotGroups, type GroupAction } from "./groups";
 import { loadGroups, saveGroups } from "./group-storage";
+import { botFilePath, fileMessageText, parseUploadedFile, validatePickedFiles, type DraftAttachment, type PickedFile } from "./files";
+import { useAttachmentDrafts } from "./use-attachment-drafts";
+import { attachmentReferences } from "./channel/protocol";
 
 export type { ChannelError } from "./chat-state";
 
@@ -31,6 +34,11 @@ type StoreValue = {
   switchInstance: (id: string) => Promise<void>;
   signOut: () => Promise<void>;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
+  requestBinary: (path: string, init?: RequestInit) => Promise<ZakuraBinary>;
+  attachmentsByAgent: Record<string, DraftAttachment[]>;
+  addAttachments: (agentId: string, files: PickedFile[]) => void;
+  clearAttachments: (agentId: string, ids: string[]) => void;
+  retryAttachment: (agentId: string, id: string) => void;
   sessions: Record<string, BotSession>;
   sessionAction: (agentId: string, action: "status" | "start" | "stop" | "new") => Promise<BotSession>;
   groups: BotGroups;
@@ -45,7 +53,7 @@ type StoreValue = {
   setDraft: (agentId: string, text: string) => void;
   /** Clear only the submitted draft; never overwrite text typed while awaiting send. */
   clearDraft: (agentId: string, submitted: string) => void;
-  send: (text: string, agentId?: string) => Promise<boolean>;
+  send: (text: string, agentId?: string, attachments?: MessageAttachment[]) => Promise<boolean>;
   retryMessage: (messageId: string) => Promise<boolean>;
   interrupt: () => Promise<void>;
   reconnect: () => Promise<void>;
@@ -254,13 +262,47 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (stateRef.current.draftsByAgent[agentId] === submitted) dispatch({ type: "draft", agentId, text: "" });
   }, [dispatch]);
 
-  const deliver = useCallback(async (agentId: string, text: string, messageId: string): Promise<boolean> => {
+  const request = useCallback(async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+    const current = settingsRef.current, scope = channelScope(current);
+    if (current.useMockChannel) throw new Error("Connect a Zakura instance to use this feature.");
+    const token = await tokenProviderRef.current?.() ?? current.authToken;
+    if (channelScope(settingsRef.current) !== scope) throw new Error("The active instance changed. Please try again.");
+    const result = await zakuraRequest<T>(current.zakuraBaseUrl, path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${token}` } });
+    if (channelScope(settingsRef.current) !== scope) throw new Error("The active instance changed. Please try again.");
+    return result;
+  }, []);
+  const requestBinary = useCallback(async (path: string, init: RequestInit = {}) => {
+    const current = settingsRef.current, scope = channelScope(current);
+    if (current.useMockChannel) throw new Error("Connect a Zakura instance to use this feature.");
+    const token = await tokenProviderRef.current?.() ?? current.authToken;
+    if (channelScope(settingsRef.current) !== scope) throw new Error("The active instance changed. Please try again.");
+    const result = await zakuraBinaryRequest(current.zakuraBaseUrl, path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${token}` } });
+    if (channelScope(settingsRef.current) !== scope) throw new Error("The active instance changed. Please try again.");
+    return result;
+  }, []);
+  const uploadFile = useCallback(async (agentId: string, file: PickedFile, signal: AbortSignal) => {
+    if (!stateRef.current.agents.some((agent) => agent.id === agentId && agent.capabilities?.files)) throw new Error("File uploads are unavailable for this bot.");
+    validatePickedFiles([file]);
+    const body = new FormData();
+    if (Platform.OS === "web") {
+      if (!file.file) throw new Error("Choose this file again.");
+      body.append("file", file.file, file.name);
+    } else body.append("file", { uri: file.uri, name: file.name, type: file.mime } as unknown as Blob);
+    const result = await request<{ file: unknown }>(botFilePath(agentId), { method: "POST", body, signal });
+    if (!stateRef.current.agents.some((agent) => agent.id === agentId)) throw new Error("This bot is no longer authorized.");
+    return parseUploadedFile(result.file);
+  }, [request]);
+  const { attachmentsByAgent, addAttachments, clearAttachments, retryAttachment } = useAttachmentDrafts(settingsScope, uploadFile);
+
+  const deliver = useCallback(async (agentId: string, text: string, messageId: string, attachments?: MessageAttachment[]): Promise<boolean> => {
     const current = stateRef.current;
     const client = clientRef.current;
     const agent = current.agents.find((item) => item.id === agentId);
-    const trimmed = text.trim();
-    if (!agent || !trimmed || trimmed.length > MAX_MESSAGE_LENGTH || isAgentWorking(current, agentId) ||
+    const trimmed = fileMessageText(text, attachments);
+    if (!agent || (!trimmed && !attachments?.length) || trimmed.length > MAX_MESSAGE_LENGTH || isAgentWorking(current, agentId) ||
       current.messagesByAgent[agentId]?.some((message) => message.pending)) return false;
+    try { attachmentReferences(attachments); }
+    catch (error) { dispatch({ type: "error", agentId, message: error instanceof Error ? error.message : "Invalid attachments." }); return false; }
     if (agent.status === "offline" || client?.getConnectionState() !== "connected") {
       dispatch({ type: "error", agentId, message: "This conversation is offline. Reconnect or choose an available agent." });
       return false;
@@ -268,9 +310,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const previous = current.messagesByAgent[agentId]?.find((message) => message.id === messageId);
     const localCreatedAt = previous?.createdAt ?? Date.now();
     dispatch({ type: "optimistic", message: { id: messageId, agentId, role: "user", kind: "text", text: trimmed,
-      createdAt: localCreatedAt } });
+      createdAt: localCreatedAt, ...(attachments?.length ? { attachments } : {}) } });
     try {
-      await client.sendMessage({ agentId, text: trimmed, clientMessageId: messageId, localCreatedAt });
+      await client.sendMessage({ agentId, text: trimmed, clientMessageId: messageId, localCreatedAt, attachments });
       return clientRef.current === client && client.getConnectionState() === "connected" &&
         stateRef.current.messagesByAgent[agentId]?.some((message) => message.id === messageId && !message.failed) === true;
     } catch (error) {
@@ -280,18 +322,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [dispatch]);
 
-  const send = useCallback((text: string, agentId?: string) =>
-    deliver(agentId ?? stateRef.current.selectedId, text, uid("user")), [deliver]);
+  const send = useCallback((text: string, agentId?: string, attachments?: MessageAttachment[]) =>
+    deliver(agentId ?? stateRef.current.selectedId, text, uid("user"), attachments), [deliver]);
 
   const retryMessage = useCallback(async (messageId: string) => {
     const agentId = stateRef.current.selectedId;
     const message = stateRef.current.messagesByAgent[agentId]?.find((item) => item.id === messageId);
-    if (!message?.failed || message.role !== "user" || !message.text) return false;
+    if (!message?.failed || message.role !== "user" || (!message.text && !message.attachments?.length)) return false;
     const draft = stateRef.current.draftsByAgent[agentId] ?? "";
-    const ok = await deliver(agentId, message.text, messageId);
-    if (ok && draft.trim() === message.text) clearDraft(agentId, draft);
+    const ok = await deliver(agentId, message.text ?? "", messageId, message.attachments);
+    if (ok) {
+      if (draft.trim() === message.text) clearDraft(agentId, draft);
+      clearAttachments(agentId, (attachmentsByAgent[agentId] ?? []).filter((row) => message.attachments?.some((file) => file.id === row.file?.id)).map((row) => row.id));
+    }
     return ok;
-  }, [deliver, clearDraft]);
+  }, [deliver, clearDraft, clearAttachments, attachmentsByAgent]);
 
   const interrupt = useCallback(async () => {
     const agentId = stateRef.current.selectedId;
@@ -384,14 +429,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setAuthNotice(notice);
   }, [updateSettings]);
 
-  const request = useCallback(async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
-    const current = settingsRef.current;
-    if (current.useMockChannel) throw new Error("Connect a Zakura instance to use this feature.");
-    const token = await tokenProviderRef.current?.() ?? current.authToken;
-    if (settingsRef.current.profileId !== current.profileId) throw new Error("The active instance changed. Please try again.");
-    return zakuraRequest<T>(current.zakuraBaseUrl, path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${token}` } });
-  }, []);
-
   const sessionAction = useCallback(async (agentId: string, action: "status" | "start" | "stop" | "new") => {
     const scope = channelScope(settingsRef.current);
     if (!stateRef.current.agents.some((agent) => agent.id === agentId)) throw new Error("This bot is no longer authorized.");
@@ -421,11 +458,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     interrupting: state.interrupting, connection: state.connection,
     connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
     profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment,
     sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, interrupt, reconnect,
     dismissError, updateSettings, setSidebarOpen, setThreadVisible,
   }), [state, settings, settingsReady, transportLabel, lastError, sidebarOpen, selectAgent, setDraft,
     clearDraft, send, retryMessage, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
-    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups]);
+    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

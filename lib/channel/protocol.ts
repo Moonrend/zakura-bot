@@ -122,8 +122,20 @@ function attachments(value: unknown): MessageAttachment[] | undefined {
     if (typeof item === "string") return { url: httpUrl(item) };
     requireValid(record(item) && optionalString(item.name));
     requireValid(item.type === undefined || oneOf(item.type, ["image", "file", "audio", "video"]));
-    return { url: httpUrl(item.url), name: item.name?.trim() || undefined, type: item.type as MessageAttachment["type"] };
+    requireValid(item.id === undefined || id(item.id));
+    requireValid(optionalString(item.mime) && (item.size === undefined || (typeof item.size === "number" && Number.isSafeInteger(item.size) && item.size > 0)));
+    return { url: httpUrl(item.url), name: item.name?.trim() || undefined, type: item.type as MessageAttachment["type"],
+      ...(item.id === undefined ? {} : { id: item.id as string }), ...(item.mime === undefined ? {} : { mime: item.mime }),
+      ...(item.size === undefined ? {} : { size: item.size as number }) };
   });
+}
+
+/** Uploaded IDs are the only attachment input accepted by the channel. */
+export function attachmentReferences(files: MessageAttachment[] = []): { fileId: string }[] {
+  if (files.length > 8 || files.some((file) => !id(file.id)) || new Set(files.map((file) => file.id)).size !== files.length) {
+    throw new Error("Choose up to 8 uploaded files with distinct file IDs.");
+  }
+  return files.map((file) => ({ fileId: file.id! }));
 }
 
 function card(value: unknown): MessageCard | undefined {
@@ -259,11 +271,13 @@ function decodeFrame(frame: RecordValue): ServerFrame | null {
       // Ordinary assistant/runtime events are not a source of visible replies.
       requireValid((m.role === "user" && m.kind === "text") || (m.role === "system" && m.kind === "system"));
       requireValid(typeof m.text === "string" && (m.clientMessageId === undefined || id(m.clientMessageId)));
-      requireValid(m.role !== "user" || (m.text.trim().length > 0 && m.text.length <= MAX_MESSAGE_LENGTH));
+      const files = m.role === "user" ? attachments(m.attachments) : undefined;
+      requireValid(m.role !== "user" || ((m.text.trim().length > 0 || files?.length) && m.text.length <= MAX_MESSAGE_LENGTH));
       return { type: "message", message: {
         id: m.id, agentId: m.agentId, role: m.role, kind: m.kind, text: m.text, createdAt: m.createdAt,
         // A system notice cannot claim a user receipt's quote/correlation alias.
         clientMessageId: m.role === "user" ? m.clientMessageId as string | undefined : undefined, pending: false, failed: false,
+        ...(files?.length ? { attachments: files } : {}),
       } };
     }
     case "tool_activity": {

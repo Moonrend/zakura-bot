@@ -26,7 +26,7 @@ export function SignIn() {
     const poll = async () => {
       if (Date.now() >= grant.expiresAt) { setGrant(null); setError("This authorization code expired. Start a new login."); return; }
       try {
-        const tokens = await pollAuthorization(grant.baseUrl, grant.data.device_code, controller.signal);
+        const tokens = await pollAuthorization(grant.baseUrl, grant.data.device_code, grant.data.code_verifier, controller.signal);
         if (controller.signal.aborted) return;
         await finishSignIn(grant.baseUrl, tokens);
         if (!controller.signal.aborted) { setGrant(null); router.dismissTo("/"); }

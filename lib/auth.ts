@@ -1,3 +1,5 @@
+import { createAuthorizationProof } from "./authorization-proof";
+
 export interface InstanceProfile {
   id: string; baseUrl: string; label: string; deviceId?: string; bindingIds: string[]; tenantName?: string;
 }
@@ -6,6 +8,8 @@ export interface Credentials {
 }
 export interface DeviceAuthorization {
   device_code: string; user_code: string; verification_uri: string; verification_uri_complete: string; expires_in: number; interval: number;
+  /** Local proof key, never included in the browser authorization URL. */
+  code_verifier: string;
 }
 export interface TokenResponse {
   access_token: string; refresh_token: string; expires_in: number; refresh_expires_at: string;
@@ -22,34 +26,47 @@ export function instanceUrl(value: string): string {
   }
   return url.href.replace(/\/+$/, "");
 }
-export async function zakuraRequest<T>(baseUrl: string, path: string, init: RequestInit = {}, fetcher = fetch): Promise<T> {
+async function readZakuraResponse<T>(baseUrl: string, path: string, init: RequestInit, read: (response: Response) => Promise<T>, fetcher = fetch): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   init.signal?.addEventListener("abort", abort, { once: true });
   if (init.signal?.aborted) controller.abort();
-  const timer = setTimeout(abort, 20_000);
+  const timer = setTimeout(abort, 60_000);
   try {
     const response = await fetcher(`${instanceUrl(baseUrl)}${path}`, { ...init, signal: controller.signal, credentials: "omit", redirect: "error",
       headers: { Accept: "application/json", ...init.headers } });
-    const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-    if (!response.ok) throw new ZakuraApiError(typeof body.error === "string" ? body.error : "request_failed", response.status,
-      typeof body.error_description === "string" ? body.error_description : typeof body.error === "string" ? body.error : `Zakura returned ${response.status}.`);
-    return body as T;
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+      throw new ZakuraApiError(typeof body.error === "string" ? body.error : "request_failed", response.status,
+        typeof body.error_description === "string" ? body.error_description : typeof body.error === "string" ? body.error : `Zakura returned ${response.status}.`);
+    }
+    return await read(response);
   } finally { clearTimeout(timer); init.signal?.removeEventListener("abort", abort); }
 }
+export const zakuraRequest = <T>(baseUrl: string, path: string, init: RequestInit = {}, fetcher = fetch): Promise<T> =>
+  readZakuraResponse(baseUrl, path, init, async (response) => await response.json() as T, fetcher);
+export interface ZakuraBinary { blob: Blob; contentType: string; capturedAt: string | null }
+export const zakuraBinaryRequest = (baseUrl: string, path: string, init: RequestInit = {}, fetcher = fetch): Promise<ZakuraBinary> =>
+  readZakuraResponse(baseUrl, path, { ...init, headers: { Accept: "application/octet-stream", ...init.headers } }, async (response) => ({
+    blob: await response.blob(), contentType: response.headers.get("content-type") ?? "application/octet-stream",
+    capturedAt: response.headers.get("x-frame-captured-at"),
+  }), fetcher);
 const json = (body: unknown, signal?: AbortSignal): RequestInit => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
 export async function startAuthorization(baseUrl: string, name: string, signal?: AbortSignal): Promise<DeviceAuthorization> {
-  const grant = await zakuraRequest<DeviceAuthorization>(baseUrl, "/api/zakurabot/oauth/device-code", json({ name }, signal));
+  const proof = await createAuthorizationProof();
+  const grant = await zakuraRequest<DeviceAuthorization>(baseUrl, "/api/zakurabot/oauth/device-code", json({ name, client_id: "zakura-bot",
+    code_challenge: proof.challenge, code_challenge_method: "S256" }, signal));
   const target = new URL(grant.verification_uri_complete);
-  if (target.origin !== new URL(instanceUrl(baseUrl)).origin || target.username || target.password ||
+  if (!["http:", "https:"].includes(target.protocol) || target.username || target.password ||
     typeof grant.device_code !== "string" || typeof grant.user_code !== "string" ||
     !Number.isFinite(grant.expires_in) || grant.expires_in <= 0 || !Number.isFinite(grant.interval) || grant.interval < 1) {
     throw new Error("Zakura returned an invalid authorization request.");
   }
-  return grant;
+  return { ...grant, code_verifier: proof.verifier };
 }
-export const pollAuthorization = (baseUrl: string, code: string, signal?: AbortSignal) =>
-  zakuraRequest<TokenResponse>(baseUrl, "/api/zakurabot/oauth/token", json({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: code }, signal));
+export const pollAuthorization = (baseUrl: string, code: string, verifier: string, signal?: AbortSignal) =>
+  zakuraRequest<TokenResponse>(baseUrl, "/api/zakurabot/oauth/token", json({ grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+    device_code: code, code_verifier: verifier, client_id: "zakura-bot" }, signal));
 export const refreshAuthorization = (baseUrl: string, token: string) =>
   zakuraRequest<TokenResponse>(baseUrl, "/api/zakurabot/oauth/token", json({ grant_type: "refresh_token", refresh_token: token }));
 export const revokeAuthorization = (baseUrl: string, token: string) =>

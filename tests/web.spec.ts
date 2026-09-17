@@ -174,7 +174,7 @@ for (const width of [320, 1024]) test(`unsupported uploads keep their explanatio
   channel!.close({ code: 4401 });
   const reconnect = page.getByRole("button", { name: "Reconnect", exact: true });
   await expect(reconnect).toBeVisible();
-  const notice = "File uploads aren’t available yet. Paste text or a link instead.";
+  const notice = "File uploads require an online Zakura bot with file access. You can still paste text or a link.";
   await input.evaluate((element) => {
     const data = new DataTransfer();
     data.items.add(new File(["image"], "photo.png", { type: "image/png" }));
@@ -2520,7 +2520,7 @@ test("unsupported file drops and image paste keep the page and draft intact", as
   await mockReady(page);
   const input = page.getByRole("textbox", { name: "Message Zakura", exact: true });
   await input.fill("Keep my draft");
-  await expect(page.getByRole("button", { name: "Attachments are not available yet", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "File uploads unavailable for this bot", exact: true })).toBeDisabled();
   const dropPrevented = await page.getByTestId("chat-transcript").evaluate((element) => {
     const dataTransfer = new DataTransfer();
     dataTransfer.items.add(new File(["test image"], "image.png", { type: "image/png" }));
@@ -2529,7 +2529,7 @@ test("unsupported file drops and image paste keep the page and draft intact", as
     return event.defaultPrevented;
   });
   expect(dropPrevented).toBe(true);
-  await expect(page.getByText("File uploads aren’t available yet. Paste text or a link instead.", { exact: true })).toBeVisible();
+  await expect(page.getByText("File uploads require an online Zakura bot with file access. You can still paste text or a link.", { exact: true })).toBeVisible();
   await expect(input).toHaveValue("Keep my draft");
   const pastePrevented = await input.evaluate((element) => {
     const clipboardData = new DataTransfer();
@@ -2619,9 +2619,9 @@ test("mixed image and text paste keeps the caption and explains the skipped uplo
   });
   await input.press("ControlOrMeta+V");
   await expect(input).toHaveValue("My draft: Pasted caption");
-  await expect(page.getByText("File uploads aren’t available yet. Paste text or a link instead.", { exact: true })).toBeVisible();
+  await expect(page.getByText("File uploads require an online Zakura bot with file access. You can still paste text or a link.", { exact: true })).toBeVisible();
   await input.pressSequentially(" edited");
-  await expect(page.getByText("File uploads aren’t available yet. Paste text or a link instead.", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("File uploads require an online Zakura bot with file access. You can still paste text or a link.", { exact: true })).toHaveCount(0);
 });
 
 test("unsupported file drops are blocked on direct settings loads and empty rosters", async ({ page }) => {

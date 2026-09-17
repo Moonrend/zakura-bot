@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
 
-export const UPLOAD_NOTICE = "File uploads aren’t available yet. Paste text or a link instead.";
+export const UPLOAD_NOTICE = "File uploads require an online Zakura bot with file access. You can still paste text or a link.";
 
 export function containsFiles(data: DataTransfer | null): boolean {
   return !!data && (Array.from(data.types).includes("Files") ||

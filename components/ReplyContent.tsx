@@ -1,11 +1,11 @@
 import { useCallback } from "react";
 import { Platform, ScrollView, Text, View } from "react-native";
-import { Paperclip } from "lucide-react-native";
 import type { ChatMessage, MessageLink } from "@/lib/types";
-import { attachmentLabel, messageContentPreview } from "@/lib/message-preview";
+import { messageContentPreview } from "@/lib/message-preview";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { ExternalLink } from "./ExternalLink";
 import { RichText } from "./RichText";
+import { AttachmentCard } from "./AttachmentCard";
 
 function keyedLinks(links: MessageLink[]) {
   const counts = new Map<string, number>();
@@ -17,7 +17,7 @@ function keyedLinks(links: MessageLink[]) {
   });
 }
 
-/** Received files are links. Uploads and embedded media playback are not implemented. */
+/** Render the complete chat_reply content, including device-scoped attachments. */
 export function ReplyContent({ message, replyTarget, onFocusLost }: {
   message: ChatMessage; replyTarget?: ChatMessage; onFocusLost?: () => void;
 }) {
@@ -34,7 +34,6 @@ export function ReplyContent({ message, replyTarget, onFocusLost }: {
     card.table?.headers.some((cell) => cell.trim()) || card.table?.rows.some((row) => row.some((cell) => cell.trim())));
   const links = [...(message.actions ?? []), ...(card?.links ?? [])];
   const images = [...(card?.images ?? []), ...(card?.imageUrl ? [{ url: card.imageUrl, alt: "Card image" }] : [])];
-  const files = (message.attachments ?? []).map((file) => ({ url: file.url, label: attachmentLabel(file) }));
   const quote = replyTarget ? messageContentPreview(replyTarget) ?? "Earlier message" : undefined;
   const hasText = !!message.text?.trim();
   const empty = !hasText && !card && !message.attachments?.length && !links.length;
@@ -73,10 +72,7 @@ export function ReplyContent({ message, replyTarget, onFocusLost }: {
           </ScrollView> : null}
         </View>
       ) : null}
-      {keyedLinks(files).map(({ link, key }) => (
-        <ExternalLink key={key} {...link} buttonStyle="default" onFocusLost={onFocusLost}
-          icon={<Paperclip size={15} color="#b3b3b3" />} />
-      ))}
+      {message.attachments?.map((file, index) => <AttachmentCard key={`${file.id ?? file.url}:${index}`} file={file} agentId={message.agentId} onFocusLost={onFocusLost} />)}
       {keyedLinks(images.map((item) => ({ url: item.url, label: item.alt || "Open image" }))).map(({ link, key }) =>
         <ExternalLink key={key} {...link} buttonStyle="default" onFocusLost={onFocusLost} />)}
       {keyedLinks(links).map(({ link, key }) =>

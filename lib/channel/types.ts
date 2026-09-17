@@ -6,7 +6,7 @@
  * docs/architecture.md; server services are maintained in Moonrend/Zakura.
  */
 
-import type { Agent, ChatMessage } from "../types";
+import type { Agent, ChatMessage, MessageAttachment } from "../types";
 
 export const MAX_MESSAGE_LENGTH = 4000;
 
@@ -31,6 +31,7 @@ export type ChannelListener = (event: ChannelEvent) => void;
 export interface SendMessageInput {
   agentId: string;
   text: string;
+  attachments?: MessageAttachment[];
   /** Stable idempotency key. The server must include it in its user echo. */
   clientMessageId?: string;
   /** Timestamp of the optimistic bubble, for local ordering only; never sent on the wire. */

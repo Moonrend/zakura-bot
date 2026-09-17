@@ -9,7 +9,8 @@
  */
 import { version } from "../../package.json";
 import type { Agent, ChatMessage } from "../types";
-import { channelCloseFailure, decodeServerFrame, InvalidChannelFrameError, isChannelId, PROTOCOL_VERSION, UnsupportedChannelProtocolError } from "./protocol";
+import { attachmentIdentity, fileMessageText } from "../files";
+import { attachmentReferences, channelCloseFailure, decodeServerFrame, InvalidChannelFrameError, isChannelId, PROTOCOL_VERSION, UnsupportedChannelProtocolError } from "./protocol";
 import {
   ChannelEmitter, MAX_MESSAGE_LENGTH, uid,
   type ChannelConnectionState, type ChannelListener,
@@ -98,7 +99,7 @@ export function validateLiveSettings(input: { baseUrl: string; token: string }):
 type Timer = ReturnType<typeof setTimeout>;
 const key = (agentId: string, messageId: string) => JSON.stringify([agentId, messageId]);
 type PendingWrite = { agentId: string; text: string; timer: Timer };
-type SentMessage = { agentId: string; text: string; createdAt: number; echo?: ChatMessage };
+type SentMessage = { agentId: string; text: string; attachments?: ChatMessage["attachments"]; createdAt: number; echo?: ChatMessage };
 type ReceiptAlias = { agentId: string; clientMessageId: string };
 type OutputIdentity = Pick<ChatMessage, "agentId" | "role" | "kind">;
 type PendingInterrupt = { timer: Timer | null };
@@ -515,8 +516,13 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
         message: "Zakura returned a message receipt with different text." });
       return null;
     }
+    if (sent && attachmentIdentity(sent.attachments) !== attachmentIdentity(message.attachments)) {
+      this.emitter.emit({ type: "error", agentId: message.agentId, turnEnded: false,
+        message: "Zakura returned a message receipt with different attachments." });
+      return null;
+    }
     const receipt = { ...message, clientMessageId };
-    this.rememberUserMessage(messageKey, { agentId: message.agentId, text: message.text!, createdAt: message.createdAt, echo: receipt });
+    this.rememberUserMessage(messageKey, { agentId: message.agentId, text: message.text!, attachments: message.attachments, createdAt: message.createdAt, echo: receipt });
     this.receiptAliases.set(serverKey, { agentId: message.agentId, clientMessageId });
     this.acknowledge(message.agentId, clientMessageId);
     return receipt;
@@ -599,8 +605,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   async sendMessage(input: SendMessageInput): Promise<void> {
     if (this.state !== "connected") throw new Error("Not connected to Zakura.");
     this.requireAvailableAgent(input.agentId);
-    const text = input.text.trim();
-    if (!text || text.length > MAX_MESSAGE_LENGTH) throw new Error(`Use 1–${MAX_MESSAGE_LENGTH} characters per message.`);
+    const text = fileMessageText(input.text, input.attachments);
+    const files = attachmentReferences(input.attachments);
+    if ((!text && !files.length) || text.length > MAX_MESSAGE_LENGTH) throw new Error(`Use 1–${MAX_MESSAGE_LENGTH} characters or attach a file.`);
     const clientMessageId = input.clientMessageId ?? uid("user");
     if (!isChannelId(clientMessageId)) throw new Error("Invalid message id.");
     const messageKey = key(input.agentId, clientMessageId);
@@ -609,6 +616,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     if (alias && alias.clientMessageId !== clientMessageId) throw new Error("This message id is already used by another receipt. Send a new message instead.");
     const sent = this.sentMessages.get(messageKey);
     if (sent && sent.text !== text) throw new Error("A message id cannot be reused for different text. Send a new message instead.");
+    if (sent && attachmentIdentity(sent.attachments) !== attachmentIdentity(input.attachments)) throw new Error("A message id cannot be reused for different attachments. Send a new message instead.");
     if (sent?.echo) {
       this.emitter.emit({ type: "message", message: sent.echo });
       return;
@@ -617,7 +625,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     if (previous) return;
     const createdAt = sent?.createdAt ?? input.localCreatedAt ?? Date.now();
     if (!Number.isFinite(createdAt) || createdAt < 0 || createdAt > 8.64e15) throw new Error("Invalid local message timestamp.");
-    this.rememberUserMessage(messageKey, { agentId: input.agentId, text, createdAt });
+    this.rememberUserMessage(messageKey, { agentId: input.agentId, text, attachments: input.attachments, createdAt });
     const pending: PendingWrite = { agentId: input.agentId, text, timer: setTimeout(() => {
       if (this.acknowledgements.get(messageKey) !== pending) return;
       // A deadline may observe CLOSING before the browser dispatches error/close.
@@ -627,7 +635,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
         message: "Delivery was not confirmed. Retry this message to check or resend it." });
     }, this.opts.acknowledgementTimeoutMs ?? 15_000) };
     this.acknowledgements.set(messageKey, pending);
-    if (!this.sendFrame({ type: "send", agentId: input.agentId, clientMessageId, text })) {
+    if (!this.sendFrame({ type: "send", agentId: input.agentId, clientMessageId, text, ...(files.length ? { attachments: files } : {}) })) {
       this.acknowledge(input.agentId, clientMessageId);
       this.failSocket("Connection lost. Reconnecting…");
       throw new Error("The message could not be written to the connection.");

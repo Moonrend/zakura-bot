@@ -6,6 +6,8 @@ import { MAX_MESSAGE_LENGTH } from "@/lib/channel";
 import { cn } from "@/lib/cn";
 import { containsFiles, UPLOAD_NOTICE } from "@/lib/use-file-drop-guard";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
+import { browserFiles, pickFiles } from "@/lib/file-picker";
+import { AttachmentTray } from "./AttachmentTray";
 
 export function Composer({ agentName, busy, deliveryPending = false, agentOffline = false, bottomInset = 0,
   attachmentNotice, setAttachmentNotice, onSubmit }: {
@@ -18,8 +20,11 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   setAttachmentNotice: (visible: boolean) => void;
   onSubmit: () => void;
 }) {
-  const { selectedId, draftsByAgent, setDraft, clearDraft, send, interrupt, interrupting, connection } = useStore();
+  const { selectedId, agents, settings, draftsByAgent, setDraft, clearDraft, send, interrupt, interrupting, connection,
+    attachmentsByAgent, addAttachments, clearAttachments, retryAttachment } = useStore();
   const text = draftsByAgent[selectedId] ?? "";
+  const attachments = attachmentsByAgent[selectedId] ?? [];
+  const filesAvailable = !settings.useMockChannel && !!agents.find((agent) => agent.id === selectedId)?.capabilities?.files;
   const { height: windowHeight } = useWindowDimensions();
   // Leave room for connection recovery controls in short windows. Longer
   // drafts scroll inside the input and expand again when more height returns.
@@ -27,6 +32,9 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   const [focused, setFocused] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [height, setHeight] = useState(44);
+  const [attachmentMenu, setAttachmentMenu] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
   const sending = useRef(false);
   const filePastePending = useRef(false);
   const inputRef = useRef<TextInput>(null);
@@ -34,7 +42,19 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   const offline = connection !== "connected" || agentOffline;
   const stopping = !!interrupting[selectedId];
   const sendingMessage = submitting || deliveryPending;
-  const canSend = text.trim().length > 0 && !busy && !offline && !sendingMessage;
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && attachments.every((row) => row.status === "ready") && !busy && !offline && !sendingMessage;
+  useEffect(() => { setAttachmentMenu(false); setPickerError(null); }, [selectedId, settings.profileId]);
+  const queueFiles = useCallback((files: File[]) => {
+    try { addAttachments(selectedId, browserFiles(files)); setPickerError(null); setAttachmentNotice(false); }
+    catch (error) { setPickerError(error instanceof Error ? error.message : "Could not attach these files."); }
+  }, [addAttachments, selectedId, setAttachmentNotice]);
+  const chooseFiles = async (images: boolean) => {
+    if (picking) return;
+    setPicking(true); setPickerError(null); setAttachmentMenu(false);
+    try { addAttachments(selectedId, await pickFiles(images)); }
+    catch (error) { setPickerError(error instanceof Error ? error.message : "Could not choose files."); }
+    finally { setPicking(false); }
+  };
   const focusDraft = useCallback(() => inputRef.current?.focus(), []);
   const setActionRecoveryRef = useFocusOnRemoval(focusDraft);
   const setActionRef = useCallback((node: View | null) => {
@@ -47,7 +67,9 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
     const input = inputRef.current as unknown as HTMLTextAreaElement | null;
     let pasteReset: ReturnType<typeof setTimeout> | undefined;
     const drop = (event: DragEvent) => {
-      if (containsFiles(event.dataTransfer)) setAttachmentNotice(true);
+      if (!containsFiles(event.dataTransfer)) return;
+      if (filesAvailable && !offline) queueFiles(Array.from(event.dataTransfer?.files ?? []));
+      else setAttachmentNotice(true);
     };
     const paste = (event: ClipboardEvent) => {
       filePastePending.current = false;
@@ -60,7 +82,8 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
         if (pasteReset) clearTimeout(pasteReset);
         pasteReset = setTimeout(() => { filePastePending.current = false; }, 0);
       }
-      setAttachmentNotice(true);
+      if (filesAvailable && !offline) queueFiles(Array.from(event.clipboardData?.files ?? []));
+      else setAttachmentNotice(true);
     };
     window.addEventListener("drop", drop);
     input?.addEventListener("paste", paste);
@@ -69,7 +92,7 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
       input?.removeEventListener("paste", paste);
       if (pasteReset) clearTimeout(pasteReset);
     };
-  }, [setAttachmentNotice]);
+  }, [setAttachmentNotice, queueFiles, filesAvailable, offline]);
 
   const resizeWebInput = useCallback(() => {
     if (Platform.OS !== "web") return;
@@ -101,12 +124,13 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
     if (!canSend || sending.current) return;
     const agentId = selectedId;
     const draft = text;
+    const submittedAttachments = attachments;
     sending.current = true;
     setSubmitting(true);
     onSubmit();
     try {
-      const ok = await send(draft, agentId);
-      if (ok) { clearDraft(agentId, draft); setAttachmentNotice(false); }
+      const ok = await send(draft, agentId, submittedAttachments.map((row) => row.file!));
+      if (ok) { clearDraft(agentId, draft); clearAttachments(agentId, submittedAttachments.map((row) => row.id)); setAttachmentNotice(false); }
     } finally {
       sending.current = false;
       setSubmitting(false);
@@ -114,21 +138,31 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
     }
   };
 
-  const hint = attachmentNotice ? UPLOAD_NOTICE
+  const hint = pickerError ?? (attachmentNotice ? UPLOAD_NOTICE
     : offline ? "Offline · your draft stays in this conversation"
+    : attachments.some((row) => row.status === "uploading") ? "Uploading files… You can add a message while you wait"
+    : attachments.some((row) => row.status === "failed") ? "Retry or remove the failed upload before sending"
     : stopping ? "Waiting for the agent to stop… Your draft stays here"
     : busy ? "You can draft your next message while the agent replies"
     : deliveryPending ? "Waiting for delivery confirmation… You can keep drafting"
-      : Platform.OS === "web" ? "Enter to send · Shift+Enter for a new line" : "Write a message, then tap Send";
+      : Platform.OS === "web" ? "Enter to send · Shift+Enter for a new line" : "Write a message, then tap Send");
 
   return (
     <View className="px-4 pt-2" style={{ paddingBottom: Math.max(bottomInset, 12) }}>
+      <AttachmentTray rows={attachments} remove={(id) => clearAttachments(selectedId, [id])} retry={(id) => retryAttachment(selectedId, id)} />
+      {attachmentMenu ? <View className="mx-auto mb-2 w-full max-w-3xl flex-row flex-wrap gap-2 rounded-xl border border-hairline bg-panel p-2">
+        <Pressable accessibilityRole="button" accessibilityLabel="Choose photos" onPress={() => void chooseFiles(true)} className="min-h-11 justify-center rounded-lg px-4"><Text className="text-ink">Photos</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Choose files" onPress={() => void chooseFiles(false)} className="min-h-11 justify-center rounded-lg px-4"><Text className="text-ink">Files</Text></Pressable>
+        <Text className="self-center px-3 text-[12px] text-ink-secondary">Up to 8 files · 16 MiB each</Text>
+      </View> : null}
+      {pickerError ? <Text accessibilityRole="alert" className="mx-auto mb-2 w-full max-w-3xl text-[12px] text-danger">{pickerError}</Text> : null}
       <View className={cn(
         "mx-auto w-full max-w-3xl flex-row items-end gap-1 rounded-[26px] border bg-raised/80 p-1.5",
         focused ? "border-accent-border" : "border-hairline",
       )}>
-        <Pressable disabled className="h-11 w-11 shrink-0 items-center justify-center rounded-full opacity-40"
-          accessibilityRole="button" accessibilityLabel="Attachments are not available yet" accessibilityState={{ disabled: true }}>
+        <Pressable disabled={!filesAvailable || offline || picking} onPress={() => setAttachmentMenu((visible) => !visible)}
+          className={cn("h-11 w-11 shrink-0 items-center justify-center rounded-full", (!filesAvailable || offline) && "opacity-40")}
+          accessibilityRole="button" accessibilityLabel={filesAvailable ? "Add attachments" : "File uploads unavailable for this bot"} accessibilityState={{ disabled: !filesAvailable || offline || picking }}>
           <Plus size={20} color="#b8b8b8" />
         </Pressable>
         <TextInput

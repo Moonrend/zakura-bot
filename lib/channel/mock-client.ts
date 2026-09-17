@@ -10,7 +10,8 @@
  */
 
 import type { Agent, ChatMessage } from "../types";
-import { isChannelId } from "./protocol";
+import { attachmentReferences, isChannelId } from "./protocol";
+import { attachmentIdentity, fileMessageText } from "../files";
 import {
   ChannelEmitter,
   MAX_MESSAGE_LENGTH,
@@ -122,14 +123,16 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
     if (!DEMO_AGENTS.some((agent) => agent.id === agentId && agent.status !== "offline")) {
       throw new Error("This agent is offline. Choose an available agent.");
     }
-    const text = input.text.trim();
-    if (!text || text.length > MAX_MESSAGE_LENGTH) throw new Error("Message is empty or too long.");
+    const text = fileMessageText(input.text, input.attachments);
+    const files = attachmentReferences(input.attachments);
+    if ((!text && !files.length) || text.length > MAX_MESSAGE_LENGTH) throw new Error("Message is empty or too long.");
     const clientMessageId = input.clientMessageId ?? uid("user");
     if (!isChannelId(clientMessageId)) throw new Error("Invalid message id.");
     const receiptKey = JSON.stringify([agentId, clientMessageId]);
     const receipt = this.receipts.get(receiptKey);
     if (receipt) {
       if (receipt.text !== text) throw new Error("A message id cannot be reused for different text. Send a new message instead.");
+      if (attachmentIdentity(receipt.attachments) !== attachmentIdentity(input.attachments)) throw new Error("A message id cannot be reused for different attachments.");
       this.emitter.emit({ type: "message", message: receipt });
       return;
     }
@@ -142,6 +145,7 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
       role: "user",
       kind: "text",
       text,
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       createdAt: Date.now(),
     };
     this.receipts.set(receiptKey, userMsg);

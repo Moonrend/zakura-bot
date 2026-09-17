@@ -6,10 +6,15 @@
     "@react-native-async-storage/async-storage": "^3.1.1",
     "expo": "~57.0.23",
     "expo-constants": "~57.0.18",
+    "expo-crypto": "~57.0.3",
+    "expo-document-picker": "~57.0.2",
+    "expo-file-system": "~57.0.7",
     "expo-font": "~57.0.4",
+    "expo-image-picker": "~57.0.18",
     "expo-linking": "~57.0.10",
     "expo-router": "~57.0.21",
     "expo-secure-store": "^57.0.4",
+    "expo-sharing": "~57.0.20",
     "expo-splash-screen": "~57.0.9",
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.3",
@@ -50,7 +55,8 @@
     "eas:build:ios": "eas build -p ios --profile preview",
     "eas:build:all": "eas build -p all --profile preview",
     "eas:build:production": "eas build -p all --profile production",
-    "prebuild:android": "expo prebuild --platform android --non-interactive"
+    "prebuild:android": "expo prebuild --platform android --non-interactive",
+    "test:integration": "tsx --test tests/zakura.integration.ts"
   },
   "private": true,
   "description": "Zakura Bot — Expo chat client for the Zakura platform (Grok Bot–inspired UI)"
