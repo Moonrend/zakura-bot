@@ -13,6 +13,9 @@
     outline-offset: 2px;
   }
   [data-testid="message-text"], [data-testid="reply-content"] * { overflow-wrap: anywhere; }
+  /* While following, resizing must not anchor a smooth scroll to an old row.
+     Readers farther up the transcript still get browser history anchoring. */
+  .transcript-following { overflow-anchor: none; }
   @media (min-height: 400px) {
     .sidebar-scroll .sidebar-search { position: sticky; top: 0; z-index: 1; }
   }

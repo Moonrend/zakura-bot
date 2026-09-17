@@ -72,6 +72,17 @@ test("Markdown links preserve nested and escaped URL parentheses without formatt
   ]);
 });
 
+test("Markdown destinations unescape punctuation without decoding signed query values", () => {
+  const source = String.raw`[Download](https://files.example.com/a\_b.pdf?key\=a\+b\&sig\=q%2Br%2F\#page\=2)`;
+  for (const streaming of [false, true]) {
+    assert.deepEqual(parseInlineMarkdown(source, streaming), [{ kind: "link", text: "Download",
+      url: "https://files.example.com/a_b.pdf?key=a+b&sig=q%2Br%2F#page=2" }]);
+    assert.deepEqual(parseInlineMarkdown(source.slice(0, -1), streaming), [{ kind: "text", text: source.slice(0, -1) }],
+      "an incomplete destination stays verbatim until its final delimiter arrives");
+  }
+  assert.deepEqual(parseInlineMarkdown("`" + source + "`"), [{ kind: "code", text: source }]);
+});
+
 test("inline code matches whole backtick runs and keeps embedded Markdown literal", () => {
   assert.deepEqual(parseInlineMarkdown("Use `` `[Literal](https://example.com)` `` then [Docs](https://example.com)."), [
     { kind: "text", text: "Use " },
@@ -89,13 +100,17 @@ test("inline code matches whole backtick runs and keeps embedded Markdown litera
 
 test("unfinished inline code keeps links literal while its closing delimiter is still streaming", () => {
   const partial = "Use `` [Literal](https://example.com) `tick`";
-  assert.deepEqual(parseInlineMarkdown(partial, true), [{ kind: "text", text: partial }]);
+  assert.deepEqual(parseInlineMarkdown(partial, true), [
+    { kind: "text", text: "Use " }, { kind: "literal", text: partial.slice(4) },
+  ]);
   assert.deepEqual(parseInlineMarkdown(partial + " `` then [Docs](https://example.com)", true), [
     { kind: "text", text: "Use " }, { kind: "code", text: "[Literal](https://example.com) `tick`" },
     { kind: "text", text: " then " }, { kind: "link", text: "Docs", url: "https://example.com" },
   ]);
   const single = "Use `[Literal](https://example.com)";
-  assert.deepEqual(parseInlineMarkdown(single, true), [{ kind: "text", text: single }]);
+  assert.deepEqual(parseInlineMarkdown(single, true), [
+    { kind: "text", text: "Use " }, { kind: "literal", text: single.slice(4) },
+  ]);
   assert.deepEqual(parseInlineMarkdown(single + "`", true), [
     { kind: "text", text: "Use " }, { kind: "code", text: "[Literal](https://example.com)" },
   ]);
@@ -106,7 +121,9 @@ test("unfinished inline code keeps links literal while its closing delimiter is 
 
 test("inline code spans soft line breaks without activating links", () => {
   const partial = "Use `` [Literal](https://example.com)\nwith `tick`";
-  assert.deepEqual(parseInlineMarkdown(partial + "\n", true), [{ kind: "text", text: partial + "\n" }]);
+  assert.deepEqual(parseInlineMarkdown(partial + "\n", true), [
+    { kind: "text", text: "Use " }, { kind: "literal", text: partial.slice(4) + "\n" },
+  ]);
   assert.deepEqual(parseInlineMarkdown(partial + " ``\n- [Docs](https://example.com)", true), [
     { kind: "text", text: "Use " }, { kind: "code", text: "[Literal](https://example.com) with `tick`" },
     { kind: "text", text: "\n- " }, { kind: "link", text: "Docs", url: "https://example.com" },
@@ -114,11 +131,25 @@ test("inline code spans soft line breaks without activating links", () => {
   assert.deepEqual(parseInlineMarkdown("`first\r\nsecond\rthird`"), [{ kind: "code", text: "first second third" }]);
 });
 
+test("unfinished streaming code shields list markers while surrounding lists still render", () => {
+  const prefix = "- Actual list\nSource ";
+  const code = "`line\n- [Literal](https://example.com)\n* source";
+  assert.deepEqual(parseInlineMarkdown(prefix + code, true), [
+    { kind: "text", text: prefix }, { kind: "literal", text: code },
+  ]);
+  assert.deepEqual(parseInlineMarkdown(prefix + code + "`\n- Next item", true), [
+    { kind: "text", text: prefix }, { kind: "code", text: "line - [Literal](https://example.com) * source" },
+    { kind: "text", text: "\n- Next item" },
+  ]);
+  assert.equal(parseInlineMarkdown(code).some((span) => span.kind === "link"), true,
+    "a final message without a closing delimiter resumes normal Markdown semantics");
+});
+
 test("inline delimiters cannot consume a following paragraph", () => {
   const text = "Use `[Docs](https://example.com)\n \nThe next paragraph`";
   assert.deepEqual(parseInlineMarkdown(text, true), [
     { kind: "text", text: "Use `" }, { kind: "link", text: "Docs", url: "https://example.com" },
-    { kind: "text", text: "\n \nThe next paragraph`" },
+    { kind: "text", text: "\n \nThe next paragraph" }, { kind: "literal", text: "`" },
   ]);
 });
 

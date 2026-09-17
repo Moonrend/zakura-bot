@@ -118,6 +118,51 @@ test("responsive sidebar transitions retain filters and restore navigation focus
   await accessible(page);
 });
 
+test("unfinished streaming code shields list markers and escaped links retain their signed destinations", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep the next draft");
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "partial-code", createdAt: 1,
+    streaming: true, payload: { text: "- Actual list\nSource `line" } }));
+  const reply = page.getByTestId("message-partial-code");
+  await expect(reply).toContainText("• Actual list");
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "partial-code",
+    delta: "\n- [Literal](https://example.com)\n* source" }));
+  await expect(reply).toContainText("- [Literal](https://example.com)");
+  await expect(reply).toContainText("* source");
+  await expect(reply.getByRole("link")).toHaveCount(0);
+  const escapedLink = String.raw`[Download](https://files.example.com/a\_b.pdf?key\=a\+b\&sig\=q%2Br%2F\#page\=2)`;
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "partial-code",
+    delta: "`\n- " + escapedLink.slice(0, -1) }));
+  await expect(reply).toContainText("line - [Literal](https://example.com) * source");
+  await expect(reply).toContainText(escapedLink.slice(0, -1));
+  await expect(reply.getByRole("link")).toHaveCount(0);
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "partial-code", delta: ")" }));
+  await expect(reply).toContainText("• Download");
+  await expect(reply.getByRole("link", { name: "Download, opens in browser", exact: true }))
+    .toHaveAttribute("href", "https://files.example.com/a_b.pdf?key=a+b&sig=q%2Br%2F#page=2");
+  channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "partial-code" }));
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "raw-destination", createdAt: 2,
+    payload: { text: escapedLink, format: "raw" } }));
+  const rawReply = page.getByTestId("message-raw-destination");
+  await expect(rawReply.getByTestId("message-text")).toHaveText(escapedLink);
+  await expect(rawReply.getByRole("link")).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep the next draft");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await noOverflow(page);
+  await accessible(page);
+});
+
 test("streamed Markdown escapes preserve literal links and list markers without changing raw replies", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
@@ -1083,7 +1128,47 @@ test("composer shrinks after deletion and sending; Escape preserves drafts and r
   await expect(input).toBeFocused();
 });
 
+test("older backfill anchors the visible history while following remains paused", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      for (let index = 0; index < 20; index++) socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `history-${index}`,
+        createdAt: 100 + index, payload: { text: `History ${index}. ${"Previous content. ".repeat(12)}` } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const transcript = page.getByTestId("chat-transcript");
+  await expect(page.getByTestId("message-history-19")).toBeInViewport();
+  await transcript.hover();
+  await page.mouse.wheel(0, -650);
+  const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
+  await expect(jump).toBeVisible();
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep reading this message");
+  const anchor = await transcript.evaluate((element) => {
+    const viewport = element.getBoundingClientRect();
+    const message = Array.from(element.querySelectorAll<HTMLElement>('[data-testid^="message-history-"]'))
+      .find((row) => row.getBoundingClientRect().top >= viewport.top && row.getBoundingClientRect().bottom <= viewport.bottom)!;
+    return { id: message.dataset.testid!, top: message.getBoundingClientRect().top, scrollTop: element.scrollTop };
+  });
+  for (let index = 0; index < 10; index++) channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `older-${index}`,
+    createdAt: index, payload: { text: `Earlier ${index}. ${"Older history. ".repeat(12)}` } }));
+  await expect(page.getByTestId("message-older-9")).toHaveCount(1);
+  await expect.poll(() => page.getByTestId(anchor.id).evaluate((element) => element.getBoundingClientRect().top)).toBe(anchor.top);
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBeGreaterThan(anchor.scrollTop);
+  await expect(jump).toBeVisible();
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep reading this message");
+  await noOverflow(page);
+});
+
 test("shrinking a multiline draft resumes following when the latest messages are back in view", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.clock.install();
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
@@ -1131,6 +1216,11 @@ test("shrinking a multiline draft resumes following when the latest messages are
     await expect(jump).toBeVisible();
     expect(await transcript.evaluate((element) => element.scrollTop)).toBe(readingPosition);
     await jump.click();
+    // Resize during the native smooth scroll, after it has captured the old
+    // destination. Waiting for completion would hide the anchoring race.
+    if (width === 1440) await page.waitForFunction((position) =>
+      document.querySelector<HTMLElement>('[data-testid="chat-transcript"]')!.scrollTop > position,
+    readingPosition, { polling: "raf" });
   }
 });
 

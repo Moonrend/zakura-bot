@@ -49,7 +49,15 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = null;
-      if (pinnedRef.current) scrollRef.current?.scrollToEnd({ animated: animated && !reducedMotionRef.current });
+      if (!pinnedRef.current) return;
+      const animate = animated && !reducedMotionRef.current;
+      scrollRef.current?.scrollToEnd({ animated: animate });
+      if (Platform.OS === "web" && !animate) {
+        // RN Web throttles scroll events. Record an immediate follow scroll
+        // before a quick upward wheel gesture can be compared to the old y.
+        const node = scrollRef.current?.getScrollableNode() as HTMLElement | undefined;
+        if (node) lastScrollY.current = node.scrollTop;
+      }
     });
   }, []);
 
@@ -145,7 +153,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
           </ScrollView>
         ) : <>
           <View className="min-h-0 min-w-0 flex-1">
-            <ScrollView ref={scrollRef} testID="chat-transcript" className="min-w-0 flex-1"
+            <ScrollView ref={scrollRef} testID="chat-transcript" className={`min-w-0 flex-1${pinned ? " transcript-following" : ""}`}
               role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
               accessibilityLabel={`Conversation with ${agent.name}`} onScroll={onScroll} scrollEventThrottle={32}
               onContentSizeChange={onContentSizeChange}

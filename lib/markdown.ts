@@ -92,16 +92,18 @@ function parseInlineParagraph(line: string, streaming: boolean): MarkdownSpan[] 
       const closing = codeEnds.get(match.index);
       if (closing === undefined) {
         // A delimiter still arriving can turn this tail into code. Keep its
-        // source visible without temporarily activating links inside it.
-        if (streaming) break;
-        continue;
+        // source literal, including list markers on following soft lines.
+        if (!streaming) continue;
+        span = { kind: "literal", text: line.slice(match.index) };
+        end = line.length;
+      } else {
+        let text = line.slice(end, closing).replace(/\n/g, " ");
+        // Markdown removes one padding space around nonblank code, allowing
+        // literal backticks at either edge without changing deliberate spacing.
+        if (text.startsWith(" ") && text.endsWith(" ") && /[^ ]/.test(text)) text = text.slice(1, -1);
+        span = { kind: "code", text };
+        end = closing + match[0].length;
       }
-      let text = line.slice(end, closing).replace(/\n/g, " ");
-      // Markdown removes one padding space around nonblank code, allowing
-      // literal backticks at either edge without changing deliberate spacing.
-      if (text.startsWith(" ") && text.endsWith(" ") && /[^ ]/.test(text)) text = text.slice(1, -1);
-      span = { kind: "code", text };
-      end = closing + match[0].length;
     } else if (match[1] !== undefined) {
       let depth = 1;
       let cursor = end;
@@ -117,7 +119,7 @@ function parseInlineParagraph(line: string, streaming: boolean): MarkdownSpan[] 
       if (depth !== 0) continue;
       end = cursor + 1;
       const urlStart = match.index + match[1].length + 3;
-      span = { kind: "link", text: unescapeMarkdown(match[1]), url: line.slice(urlStart, cursor).replace(/\\([\\()])/g, "$1") };
+      span = { kind: "link", text: unescapeMarkdown(match[1]), url: unescapeMarkdown(line.slice(urlStart, cursor)) };
     } else {
       span = { kind: "strong", text: unescapeMarkdown(match[0].slice(2, -2)) };
     }
