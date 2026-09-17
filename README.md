@@ -80,7 +80,7 @@ npx playwright install chromium  # first browser-test run
 npm run test:web
 ```
 
-Browser checks cover desktop/mobile layouts, IME input, keyboard focus/scrolling, network loss and recovery, reconnect retries, history replay, late interrupt refusal, mixed image/text paste, file drops outside the composer, and WCAG checks with axe. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
+Browser checks cover desktop/mobile layouts, IME input, keyboard focus/scrolling, reading expanded tool details during incoming replies, network loss and recovery, reconnect retries, history replay, late interrupt refusal, mixed image/text paste, file drops outside the composer, and WCAG checks with axe. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
 
 
 ## CI / packaging
@@ -180,7 +180,7 @@ The v1 client also enforces these boundaries in `lib/channel/protocol.ts` and `l
 - Send rejections include `agentId` and `clientMessageId`. An old rejection after acknowledgement cannot fail an accepted message. A delivery timeout or rejection preserves active work, including the interval before its first visible output. Interrupt requests have progress, timeout and duplicate-click protection. All v1 errors without `turnEnded` preserve ongoing output, even a delayed refusal arriving during the next turn; newer adapters must explicitly set `turnEnded: true` with an `agentId` for terminal errors. v1 lacks operation ids, so a delayed refusal can release a newer Stop request's progress indicator, but cannot terminate its reply.
 - A correlated failure of the latest user turn stops output and clears Stop progress while keeping its message delivered; a replayed receipt cannot dismiss that run error. Older correlated failures cannot stop newer work. Transport and transcript share the optimistic timestamp and maintain the same stable order when receipts and history update timestamps.
 - Delivery and run errors are retained separately for each message. A late receipt or retry clears only that message's delivery error; other failures remain available in the banner until dismissed or a new message starts recovery.
-- The 1 MB frame limit counts UTF-8 bytes, including CJK and emoji. After a browser socket error or a write that races socket closure, handshake, heartbeat and request deadlines are cleared before waiting up to one second for the close code. Authentication failures remain terminal; a missing close event falls back to reconnect without automatically resending messages.
+- The 1 MB frame limit counts UTF-8 bytes, including CJK and emoji. After a browser socket error, or a write or deadline that observes a closing socket, handshake, heartbeat and request deadlines are cleared before waiting up to one second for the close code. Authentication failures remain terminal; a missing close event falls back to reconnect without automatically resending messages.
 - The adapter must resolve workspace attachments to HTTP(S) URLs and set `reply_to` to the actual quoted platform message id, including the `RemoteChannelSessionHandle.inboundMessageId` default. Quotes resolve only inside the current conversation; missing history shows “Reply to earlier message”.
 - Blank card decoration is omitted when the same `chat_reply` contains usable text, attachments or actions. Wholly blank replies, malformed fields and unsafe URLs are still rejected.
 

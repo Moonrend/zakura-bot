@@ -15,9 +15,10 @@ type Props = {
   retryDisabled?: boolean;
   grouped?: boolean;
   reducedMotion?: boolean;
+  onExpandDetails?: () => void;
 };
 
-export function MessageBubble({ message, replyTarget, onRetry, onRetryFocusLost, retryDisabled, grouped, reducedMotion }: Props) {
+export function MessageBubble({ message, replyTarget, onRetry, onRetryFocusLost, retryDisabled, grouped, reducedMotion, onExpandDetails }: Props) {
   const retryRef = useRef<View | null>(null);
   const setRetryRef = useCallback((node: View | null) => {
     // A retry or a late receipt removes this control. Keep keyboard navigation
@@ -26,7 +27,7 @@ export function MessageBubble({ message, replyTarget, onRetry, onRetryFocusLost,
       document.activeElement === (retryRef.current as unknown as HTMLElement)) onRetryFocusLost?.();
     retryRef.current = node;
   }, [onRetryFocusLost]);
-  if (message.kind === "activity" && message.tool) return <ActivityChip tool={message.tool} reducedMotion={reducedMotion} />;
+  if (message.kind === "activity" && message.tool) return <ActivityChip tool={message.tool} reducedMotion={reducedMotion} onExpand={onExpandDetails} />;
   if (message.kind === "system") return <View className="my-2 min-w-0 items-center"><Text testID="message-text"
     className="max-w-full text-[12px] text-ink-secondary" selectable>{message.text}</Text></View>;
   const user = message.role === "user";

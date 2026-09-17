@@ -4,7 +4,9 @@ import { Check, ChevronDown, ChevronUp, Square, Wrench, X } from "lucide-react-n
 import type { ToolActivity } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
-export function ActivityChip({ tool, reducedMotion = false }: { tool: ToolActivity; reducedMotion?: boolean }) {
+export function ActivityChip({ tool, reducedMotion = false, onExpand }: {
+  tool: ToolActivity; reducedMotion?: boolean; onExpand?: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const detailId = useId();
   const stopped = !!tool.interrupted;
@@ -18,7 +20,10 @@ export function ActivityChip({ tool, reducedMotion = false }: { tool: ToolActivi
 
   return (
     <View className="mb-2 max-w-full items-start">
-      <Pressable onPress={() => setExpanded((value) => !value)} disabled={!tool.detail}
+      <Pressable onPress={() => {
+        if (!expanded) onExpand?.();
+        setExpanded((value) => !value);
+      }} disabled={!tool.detail}
         accessibilityRole={tool.detail ? "button" : "text"}
         accessibilityLabel={`Tool ${tool.name}, ${status}`}
         {...(Platform.OS === "web" ? { "aria-expanded": tool.detail ? expanded : undefined,

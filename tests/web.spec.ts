@@ -16,6 +16,64 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+for (const width of [1440, 320]) test(`expanding long tool details keeps their beginning visible while replies arrive (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  let channel: WebSocketRoute | undefined;
+  const detail = Array.from({ length: 60 }, (_, index) => `Report line ${index + 1}: tool output`).join("\n");
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      for (let index = 0; index < 16; index++) socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `history-${index}`,
+        createdAt: index, payload: { text: `History ${index}. ${"Previous content. ".repeat(12)}` } }));
+      socket.send(JSON.stringify({ type: "tool_activity", agentId: "live", message: { id: "report", agentId: "live",
+        role: "assistant", kind: "activity", createdAt: 20, tool: { name: "report", ok: true, detail } } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const transcript = page.getByTestId("chat-transcript");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep the next draft");
+  const chip = page.getByRole("button", { name: "Tool report, Done", exact: true });
+  await expect(chip).toBeInViewport();
+  await chip.focus();
+  const before = await transcript.evaluate((element) => ({ top: element.scrollTop, height: element.scrollHeight }));
+  await chip.press("Enter");
+  await expect(chip).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollHeight)).toBeGreaterThan(before.height + 500);
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(before.top);
+  await expect(chip).toBeFocused();
+  await expect(chip).toBeInViewport();
+  const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
+  await expect(jump).toBeVisible();
+  await input.focus();
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "after-details", createdAt: 30, payload: { text: "New reply below the report" } }));
+  await expect(page.getByTestId("message-after-details")).toHaveCount(1);
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(before.top);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep the next draft");
+  await jump.click();
+  await expect(jump).toHaveCount(0);
+  await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(80);
+  channel!.send(JSON.stringify({ type: "tool_activity", agentId: "live", message: { id: "short-report", agentId: "live",
+    role: "assistant", kind: "activity", createdAt: 40, tool: { name: "summary", ok: true, detail: "A short summary" } } }));
+  const summary = page.getByRole("button", { name: "Tool summary, Done", exact: true });
+  await expect(summary).toBeInViewport();
+  await summary.press("Enter");
+  await expect(page.getByText("A short summary", { exact: true })).toBeInViewport();
+  await expect(jump).toHaveCount(0);
+  await summary.press("Enter");
+  await expect(summary).toHaveAttribute("aria-expanded", "false");
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "after-summary", createdAt: 50, payload: { text: "Still following new replies" } }));
+  await expect(page.getByTestId("message-after-summary")).toBeInViewport();
+  await expect(jump).toHaveCount(0);
+  await expect(input).toHaveValue("Keep the next draft");
+  await noOverflow(page);
+  await accessible(page);
+});
+
 test("responsive sidebar transitions retain filters and restore navigation focus", async ({ page }) => {
   await mockReady(page);
   const search = page.getByRole("textbox", { name: "Search agents", exact: true });

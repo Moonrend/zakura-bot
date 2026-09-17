@@ -33,6 +33,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const [pinned, setPinned] = useState(true);
   const pinnedRef = useRef(true);
   const lastScrollY = useRef(0);
+  const viewportHeight = useRef(0);
 
   const focusTranscript = useCallback(() => {
     if (Platform.OS === "web") {
@@ -56,6 +57,20 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     setPinned(true);
     scrollToLatest(animated);
   }, [scrollToLatest]);
+
+  const pauseForDetails = useCallback(() => {
+    // Expanding a tool is a request to read from its beginning. The resulting
+    // content resize and incoming replies must not scroll past the focused chip.
+    pinnedRef.current = false;
+    setPinned(false);
+  }, []);
+
+  const onContentSizeChange = useCallback((_width: number, height: number) => {
+    const nearEnd = height - viewportHeight.current - lastScrollY.current < 80;
+    // Short details may still fit, and collapsing can bring the end back into
+    // view. Resume following without leaving a redundant jump control behind.
+    if (pinnedRef.current || nearEnd) pinToLatest();
+  }, [pinToLatest]);
 
   useEffect(() => {
     pinnedRef.current = true;
@@ -123,8 +138,11 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
             <ScrollView ref={scrollRef} testID="chat-transcript" className="min-w-0 flex-1"
               role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
               accessibilityLabel={`Conversation with ${agent.name}`} onScroll={onScroll} scrollEventThrottle={32}
-              onContentSizeChange={() => { if (pinnedRef.current) scrollToLatest(); }}
-              onLayout={() => { if (pinnedRef.current) scrollToLatest(); }}
+              onContentSizeChange={onContentSizeChange}
+              onLayout={(event) => {
+                viewportHeight.current = event.nativeEvent.layout.height;
+                if (pinnedRef.current) scrollToLatest();
+              }}
               // On web, on-drag also dismisses focus for programmatic auto-scroll.
               keyboardDismissMode={Platform.OS === "web" ? "none" : Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
               contentContainerStyle={{ paddingTop: 8, paddingBottom: 20, paddingHorizontal: compact ? 12 : 24,
@@ -139,6 +157,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
                   <View className="h-px flex-1 bg-hairline/70" />
                 </View>
               ) : <MessageBubble key={`message_${row.message.id}`} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
+                onExpandDetails={pauseForDetails}
                 replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
                 retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
                 onRetry={(id) => void retryMessage(id)} onRetryFocusLost={focusTranscript} />)}

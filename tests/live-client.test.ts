@@ -1084,3 +1084,57 @@ test("a closing socket without a close event reconnects after a bounded wait and
   await client.sendMessage(input);
   assert.equal(sockets[1].sent.at(-1)?.clientMessageId, input.clientMessageId);
 });
+
+test("closing sockets preserve authorization codes when channel and request deadlines expire", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const deadline of ["handshake", "pong", "delivery", "interrupt"] as const) {
+    for (const readyState of [2, 3]) {
+      const { client, sockets, events } = liveHarness({ handshakeTimeoutMs: 100,
+        heartbeatMs: deadline === "pong" ? 20 : 0, pongTimeoutMs: 100,
+        acknowledgementTimeoutMs: deadline === "delivery" ? 100 : 200,
+        interruptTimeoutMs: deadline === "interrupt" ? 100 : 200 });
+      t.after(() => client.disconnect());
+      await client.connect(); const socket = sockets[0]; socket.open();
+      if (deadline !== "handshake") {
+        socket.ready();
+        await client.sendMessage({ agentId: "a", clientMessageId: "pending", text: "Keep this message" });
+        await client.interrupt("b");
+      }
+      if (deadline === "pong") t.mock.timers.tick(20);
+      t.mock.timers.tick(99);
+      // No error event: a deadline is the first observer of the closing socket.
+      socket.readyState = readyState;
+      t.mock.timers.tick(1);
+      assert.equal(client.getConnectionState(), "error", deadline);
+      const count = events.length;
+      t.mock.timers.tick(250);
+      assert.equal(events.length, count, "other deadlines cannot report failures while waiting for close");
+      socket.remoteClose(4401);
+      assert.match(JSON.stringify(events.at(-1)), /Authentication failed/, deadline);
+      t.mock.timers.tick(5000);
+      assert.equal(sockets.length, 1, "an authorization close remains terminal");
+      client.disconnect();
+    }
+  }
+});
+
+test("a pong deadline on a closing socket has a bounded grace period and retains manual retry", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets } = liveHarness({ heartbeatMs: 20, pongTimeoutMs: 100, acknowledgementTimeoutMs: 500 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  const input = { agentId: "a", clientMessageId: "pending", text: "Retry only when requested" };
+  await client.sendMessage(input);
+  t.mock.timers.tick(20);
+  socket.readyState = 2;
+  t.mock.timers.tick(100);
+  t.mock.timers.tick(1000);
+  assert.equal(sockets.length, 1, "backoff starts only after the close grace period");
+  t.mock.timers.tick(1000);
+  assert.equal(sockets.length, 2);
+  sockets[1].open(); sockets[1].ready();
+  assert.deepEqual(sockets[1].sent.map((frame) => frame.type), ["hello"]);
+  await assert.rejects(client.sendMessage({ ...input, text: "Different body" }), /different text/);
+  await client.sendMessage(input);
+  assert.equal(sockets[1].sent.at(-1)?.clientMessageId, input.clientMessageId);
+});

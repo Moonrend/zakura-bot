@@ -190,13 +190,13 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.socket = socket;
     const current = () => this.socket === socket && !this.closedByUser;
     this.handshakeTimer = setTimeout(() => {
-      if (current()) this.fail("Zakura did not complete the channel handshake.", true);
+      if (current()) this.failSocket("Zakura did not complete the channel handshake.");
     }, this.opts.handshakeTimeoutMs ?? 10_000);
 
     socket.onopen = () => {
       if (!current()) return;
       if (!this.sendFrame({ type: "hello", protocol: PROTOCOL_VERSION, token: this.opts.token.trim(), client: CLIENT_INFO })) {
-        this.failWrite("Could not send the channel handshake.");
+        this.failSocket("Could not send the channel handshake.");
       }
     };
     socket.onmessage = (event) => {
@@ -233,10 +233,15 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     }, 1000);
   }
 
-  private failWrite(detail: string) {
+  private awaitClosingSocket(detail: string): boolean {
     const socket = this.socket;
-    if (socket && socket.readyState >= 2) this.awaitClose(socket, detail);
-    else this.fail(detail, true);
+    if (!socket || socket.readyState < 2) return false;
+    this.awaitClose(socket, detail);
+    return true;
+  }
+
+  private failSocket(detail: string) {
+    if (!this.awaitClosingSocket(detail)) this.fail(detail, true);
   }
 
   private fail(detail: string, retry: boolean) {
@@ -271,9 +276,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.heartbeatTimer = setInterval(() => {
       if (this.socket !== socket || this.state !== "connected" || this.pongTimer) return;
       this.pongTimer = setTimeout(() => {
-        if (this.socket === socket) this.fail("Zakura stopped responding. Reconnecting…", true);
+        if (this.socket === socket) this.failSocket("Zakura stopped responding. Reconnecting…");
       }, this.opts.pongTimeoutMs ?? 10_000);
-      if (!this.sendFrame({ type: "ping" })) this.failWrite("Connection lost. Reconnecting…");
+      if (!this.sendFrame({ type: "ping" })) this.failSocket("Connection lost. Reconnecting…");
     }, interval);
   }
 
@@ -592,6 +597,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.rememberUserMessage(messageKey, { agentId: input.agentId, text, createdAt });
     const pending: PendingWrite = { agentId: input.agentId, text, timer: setTimeout(() => {
       if (this.acknowledgements.get(messageKey) !== pending) return;
+      // A deadline may observe CLOSING before the browser dispatches error/close.
+      if (this.awaitClosingSocket("Connection lost. Reconnecting…")) return;
       this.acknowledgements.delete(messageKey);
       this.emitter.emit({ type: "error", agentId: input.agentId, clientMessageId, turnEnded: false,
         message: "Delivery was not confirmed. Retry this message to check or resend it." });
@@ -599,7 +606,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.acknowledgements.set(messageKey, pending);
     if (!this.sendFrame({ type: "send", agentId: input.agentId, clientMessageId, text })) {
       this.acknowledge(input.agentId, clientMessageId);
-      this.failWrite("Connection lost. Reconnecting…");
+      this.failSocket("Connection lost. Reconnecting…");
       throw new Error("The message could not be written to the connection.");
     }
   }
@@ -612,6 +619,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     const pending = { timer: null as Timer | null };
     pending.timer = setTimeout(() => {
       if (this.interrupts.get(agentId) !== pending) return;
+      if (this.awaitClosingSocket("Connection lost. Reconnecting…")) return;
       pending.timer = null;
       this.emitter.emit({ type: "interrupt_pending", agentId, pending: false });
       if (this.interrupts.get(agentId) === pending) {
@@ -627,7 +635,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     // this write. Never let that cancelled request reach a replacement turn.
     if (this.interrupts.get(agentId) !== pending) return;
     if (!this.sendFrame({ type: "interrupt", agentId })) {
-      this.failWrite("Connection lost. Reconnecting…");
+      this.failSocket("Connection lost. Reconnecting…");
       throw new Error("Could not stop the reply. Check the channel connection.");
     }
   }
