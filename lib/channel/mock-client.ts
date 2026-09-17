@@ -10,6 +10,7 @@
  */
 
 import type { Agent, ChatMessage } from "../types";
+import { isChannelId } from "./protocol";
 import {
   ChannelEmitter,
   MAX_MESSAGE_LENGTH,
@@ -46,6 +47,9 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
   private generation = 0;
   private connectionGeneration = 0;
   private connecting: Promise<void> | null = null;
+  // Like the live channel, an accepted id returns only its original receipt.
+  // Keep receipts through reconnect for this in-memory client instance.
+  private receipts = new Map<string, ChatMessage>();
 
   getConnectionState(): ChannelConnectionState {
     return this.state;
@@ -64,14 +68,19 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
     if (this.state === "connected") return;
     if (this.connecting) return this.connecting;
     const generation = ++this.connectionGeneration;
-    this.setState("connecting");
-    this.connecting = sleep(250).then(() => {
+    const pending = sleep(250).then(() => {
       if (generation !== this.connectionGeneration) return;
       this.emitter.emit({ type: "agents", agents: DEMO_AGENTS });
-      this.setState("connected", "mock transport");
+      // Roster listeners can disconnect or start a replacement connection.
+      // Never publish readiness, or clear that replacement's pending promise.
+      if (generation !== this.connectionGeneration) return;
       this.connecting = null;
+      this.setState("connected", "mock transport");
     });
-    return this.connecting;
+    // Publish the pending attempt before notifying listeners of connecting.
+    this.connecting = pending;
+    this.setState("connecting");
+    return pending;
   }
 
   disconnect(): void {
@@ -113,18 +122,32 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
     if (!DEMO_AGENTS.some((agent) => agent.id === agentId && agent.status !== "offline")) {
       throw new Error("This agent is offline. Choose an available agent.");
     }
-    if (!input.text.trim() || input.text.length > MAX_MESSAGE_LENGTH) throw new Error("Message is empty or too long.");
+    const text = input.text.trim();
+    if (!text || text.length > MAX_MESSAGE_LENGTH) throw new Error("Message is empty or too long.");
+    const clientMessageId = input.clientMessageId ?? uid("user");
+    if (!isChannelId(clientMessageId)) throw new Error("Invalid message id.");
+    const receiptKey = JSON.stringify([agentId, clientMessageId]);
+    const receipt = this.receipts.get(receiptKey);
+    if (receipt) {
+      if (receipt.text !== text) throw new Error("A message id cannot be reused for different text. Send a new message instead.");
+      this.emitter.emit({ type: "message", message: receipt });
+      return;
+    }
 
     // Echo the user message back as the server would (ids are stable).
     const userMsg: ChatMessage = {
-      id: input.clientMessageId ?? uid("user"),
+      id: clientMessageId,
+      clientMessageId,
       agentId,
       role: "user",
       kind: "text",
-      text: input.text,
+      text,
       createdAt: Date.now(),
     };
+    this.receipts.set(receiptKey, userMsg);
+    const connectionGeneration = this.connectionGeneration;
     this.emitter.emit({ type: "message", message: userMsg });
+    if (connectionGeneration !== this.connectionGeneration || this.state !== "connected") return;
 
     // Start a new turn; any previous turn for this agent is cancelled.
     const previous = this.turns.get(agentId);
@@ -135,7 +158,7 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
 
     // Run the simulated turn without blocking the caller (matches a real
     // transport where send() resolves once the frame is written).
-    void this.runTurn(input, turn);
+    void this.runTurn({ ...input, text }, turn);
   }
 
   private async runTurn(input: SendMessageInput, turn: ActiveTurn): Promise<void> {

@@ -21,6 +21,8 @@ Talks to [Zakura](https://github.com/Moonrend/Zakura) as a messaging channel —
 
 Sending from the composer brings the transcript back to the latest messages; incoming replies preserve your position while reading history. Shortening a multiline draft resumes following when the latest messages come back into view. Jump to latest and disappearing Retry, suggestion and error controls keep keyboard focus in the transcript. Sending a suggestion preserves the draft. History timestamp corrections cannot duplicate bubbles through a collision with date separators. Long system notices wrap within narrow conversations. Raw and Markdown streams show a cursor beside the arriving text; unmatched Markdown delimiters remain visible. Unsupported file drops cannot navigate away from any app route. Mixed image/text paste keeps the text and explains that the image was not uploaded.
 
+Long conversations initially show the latest 50 messages. **Load earlier messages** reveals another page of received history while preserving the visible row and keyboard focus. Reading or expanding history keeps those rows available as new replies arrive; quotes can still resolve to messages outside the displayed page. Switching conversations returns to the latest page. This pages messages already received by the app: v1 provides the latest 100 messages on reconnect and has no request for older server history. Whitespace-only reply bodies do not create blank space above files or cards, and completed attachment/card replies have meaningful screen-reader announcements.
+
 Roster removal and changing search matches keep keyboard navigation in the agent list or the replacement conversation without moving focus away from another draft. Search and unread filters survive switching between the desktop sidebar and mobile drawer, including closing and reopening the drawer. If resizing removes the focused sidebar, focus moves to the visible agent list or its menu button. File, image and card-action links have a full 44px minimum hit area; primary and danger actions retain their supplied styles.
 
 Streaming Markdown keeps backticks inside code strings and supports matching backtick or tilde fences, including longer fences around Markdown examples. Inline code also requires matching backtick runs, keeping embedded backticks and link syntax literal across soft line breaks. An unfinished inline-code span stays literal until its closing delimiter arrives or the paragraph ends. Links preserve balanced or escaped parentheses in their destination. Reaching the bottom by scrolling also restores transcript focus when a focused Jump to latest control disappears. Changing the system's reduced-motion preference preserves your reading position and draft focus.
@@ -81,6 +83,8 @@ npm run test:web
 ```
 
 Browser checks cover desktop/mobile layouts, IME input, keyboard focus/scrolling, reading expanded tool details during incoming replies, network loss and recovery, reconnect retries, history replay, late interrupt refusal, mixed image/text paste, file drops outside the composer, and WCAG checks with axe. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
+
+The mock follows the live client's message-id and text validation. Reusing an accepted id returns its original receipt without restarting a reply, including after Stop or reconnect. Interrupted mock handshakes and receipt listeners cannot start output on a replacement connection.
 
 
 ## CI / packaging
@@ -231,7 +235,7 @@ npm run typecheck && npm test
 
 ### 现状
 
-- **已实现**：Expo 壳、侧边栏搜索 / 未读 / 状态点、流式气泡、工具 Chip、空态与错误态、Composer 草稿与键盘避让、a11y、Mock 通道、Live WS 客户端与协议解码、设置持久化。
+- **已实现**：Expo 壳、侧边栏搜索 / 未读 / 状态点、流式气泡、工具 Chip、空态与错误态、Composer 草稿与键盘避让、a11y、Mock 通道、Live WS 客户端与协议解码、设置持久化。已收到的历史按 50 条分页展开；v1 尚无请求更早服务端历史的接口。
 - **已联调**：参考 Zakura 服务端的真实 WS、持久化回执与历史补发、远程工具引用和附件下载；使用受控 runtime，未连接生产模型。快速重连时参考服务端有重复退订竞态，详见架构文档。
 - **仍占位**：附件上传、客户端添加 Agent、内嵌媒体、原生 SecureStore、持久化草稿；电脑桌面预览、语音和上架不在当前范围。
 

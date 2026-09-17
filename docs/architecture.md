@@ -144,6 +144,10 @@ The live client also retains reply, tool and system-notice identities across rec
 
 Message rows and date separators use distinct React key prefixes, so channel ids such as `day_anchor` cannot duplicate bubbles when timestamp updates reorder history. When a focused Retry, suggestion or error control disappears, focus returns to the transcript without scrolling; a draft that already has focus keeps it. This includes suggestions removed by an offline roster, errors cleared by a late receipt, and manual reconnect. With no selected agent, the channel setup region provides the focus target.
 
+The transcript initially mounts the most recent 50 messages and exposes earlier received messages in pages of 50. Once the user reads or expands history, its first visible message id fixes the displayed range so live appends cannot evict rows being read. Quotes, delivery state and activity state still use the full conversation. Expanding a page preserves the visible row's offset on web (including concurrent appends) and restores focus to the transcript; native uses the content-height change to preserve its offset. Newly received older backfill updates the remaining count, including after the last displayed page. Switching agents resets the page to the newest messages without changing drafts. This is local display pagination: the v1 gateway's latest-100 replay is unchanged, and no older-history request or replay cursor is available.
+
+Whitespace-only reply bodies and card titles, subtitles and bodies do not allocate blank paragraphs. Whitespace remains in the message data, so a stream can later render meaningful indented text; until then it shows only its cursor. Completed replies announce their visible text, card or attachment preview, and an empty interrupted reply announces that it stopped before any text arrived. A blank card title cannot hide its usable body or subtitle in that preview.
+
 Removing a focused sidebar row through roster revocation or a changed search match restores focus to the agent list. Revoking the selected conversation restores focus to the replacement transcript or channel setup region, while revoked drafts are pruned. The shared removal hook waits for React to attach replacement refs and only restores focus if the old node is detached and no other control has taken focus. It therefore also preserves drawer dismissal and unread-filter navigation.
 
 Sidebar search and unread filters live with the screen, so desktop/mobile transitions and drawer reopening retain them. The same removal hook moves focus from a disappearing sidebar to the new desktop list or mobile menu button. Resizing while drafting preserves the composer's focus.
@@ -208,11 +212,14 @@ Checked against `Moonrend/Zakura@8c5ae1a`. The reference `ZakurabotChannel.subsc
 | Streaming bubbles, tool chips, empty/error states | **Done** |
 | Composer drafts, keyboard avoidance, a11y labels | **Done** |
 | Mock channel + demo transcript | **Done** |
+| Pagination of received transcript messages | **Done (50 per page); older server history API unavailable in v1** |
 | Live WS client + protocol decoder | **Done (client)** |
 | Platform `zakurabot` adapter in Zakura | **Implemented in the reference server checkout** |
 | Real WS / persistent server sessions | **Local integration uses Zakura’s test fixture with a controlled runtime; see the reconnect limitation above** |
 | Deployed model / device integration | **Requires a configured server and device token; not exercised here** |
 | Computer pane / voice / App Store | **Out of scope** |
+
+The mock retains accepted user receipts by agent and message id for the lifetime of its client, including manual reconnect. Duplicate sends return the same body, id and timestamp without starting another turn; changed bodies and invalid ids are rejected, matching the live contract. Connection attempts publish their pending promise before notifying listeners and recheck their generation after roster delivery. Disconnecting or reconnecting from a handshake/receipt listener cannot publish stale readiness, overwrite the next handshake, or start output after that receipt's connection was replaced.
 
 ## UX references (contracts only)
 

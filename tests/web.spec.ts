@@ -16,6 +16,173 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+for (const width of [1440, 320]) test(`earlier history loads in pages without losing quotes, reading position or keyboard focus (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      for (let index = 0; index < 125; index++) {
+        socket.send(JSON.stringify(index === 10 ? { type: "message", message: {
+          id: "history-10", clientMessageId: "history-10", agentId: "live", role: "user", kind: "text", text: "The original request outside this page", createdAt: 1000 + index,
+        } } : { type: "chat_reply", agentId: "live", messageId: `history-${index}`, createdAt: 1000 + index,
+          payload: { text: `History ${index}. ${"Previous content. ".repeat(8)}`, reply_to: index === 124 ? "history-10" : undefined } }));
+      }
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const transcript = page.getByTestId("chat-transcript");
+  const rows = transcript.locator('[data-testid^="transcript-row-"]');
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await expect(rows).toHaveCount(50);
+  await expect(page.getByTestId("message-history-124")).toBeInViewport();
+  await expect(page.getByTestId("message-history-10")).toHaveCount(0);
+  await expect(page.getByTestId("message-history-124")).toContainText("Reply to you");
+  await expect(page.getByTestId("message-history-124")).toContainText("The original request outside this page");
+  await input.fill("Keep the draft while loading history");
+  await transcript.focus();
+  await transcript.press("Home");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+  const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
+  await load.focus();
+  const anchor = page.getByTestId("transcript-row-history-75");
+  const top = await anchor.evaluate((element) => element.getBoundingClientRect().top);
+  await load.press("Enter");
+  await expect(rows).toHaveCount(100);
+  await expect(page.getByTestId("message-history-25")).toHaveCount(1);
+  await expect.poll(() => anchor.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(top, 0);
+  await expect(transcript).toBeFocused();
+  await expect(page.getByText("50 earlier messages loaded. 25 more available.", { exact: true })).toHaveCount(1);
+
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "new", createdAt: 2000, payload: { text: "A live reply after loading history" } }));
+  await expect(rows).toHaveCount(101);
+  await expect.poll(() => anchor.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(top, 0);
+  await expect(transcript).toBeFocused();
+  await expect(input).toHaveValue("Keep the draft while loading history");
+
+  await transcript.press("Home");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+  await load.focus();
+  const lastAnchor = page.getByTestId("transcript-row-history-25");
+  const lastTop = await lastAnchor.evaluate((element) => element.getBoundingClientRect().top);
+  await load.press("Enter");
+  await expect(rows).toHaveCount(126);
+  await expect(load).toHaveCount(0);
+  await expect(page.getByTestId("message-history-0")).toHaveCount(1);
+  await expect(page.getByTestId("message-history-10")).toHaveCount(1);
+  await expect.poll(() => lastAnchor.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(lastTop, 0);
+  await expect(transcript).toBeFocused();
+  await expect(page.getByText("25 earlier messages loaded. All available history is shown.", { exact: true })).toHaveCount(1);
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "older-backfill", createdAt: 0,
+    payload: { text: "Additional available history" } }));
+  await expect(load).toHaveCount(1);
+  await expect(rows).toHaveCount(126);
+  await expect(page.getByText("25 earlier messages loaded. 1 more available.", { exact: true })).toHaveCount(1);
+  await expect.poll(() => lastAnchor.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(lastTop, 0);
+  await noOverflow(page);
+  await accessible(page);
+});
+
+test("reading a paged transcript retains its rows through live appends and backfill; switching agents resets the page", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }, { id: "other", name: "Other", status: "idle" }] }));
+      for (const agentId of ["live", "other"]) for (let index = 0; index < 75; index++) socket.send(JSON.stringify({
+        type: "chat_reply", agentId, messageId: `history-${index}`, createdAt: 1000 + index, payload: { text: `${agentId} history ${index}. ${"Previous content. ".repeat(8)}` },
+      }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const transcript = page.getByTestId("chat-transcript");
+  const rows = transcript.locator('[data-testid^="transcript-row-"]');
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await expect(rows).toHaveCount(50);
+  await expect(page.getByTestId("message-history-74")).toBeInViewport();
+  for (let index = 75; index < 80; index++) channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `history-${index}`,
+    createdAt: 1000 + index, payload: { text: `live history ${index}` } }));
+  await expect(page.getByTestId("message-history-79")).toBeInViewport();
+  await expect(rows).toHaveCount(50);
+  await expect(page.getByTestId("message-history-25")).toHaveCount(0);
+  await transcript.focus();
+  await transcript.press("Home");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(page.getByRole("button", { name: "Jump to latest", exact: true })).toBeVisible();
+  const anchor = page.getByTestId("transcript-row-history-30");
+  const top = await anchor.evaluate((element) => element.getBoundingClientRect().top);
+  await input.fill("This conversation's draft");
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "history-80", createdAt: 1080, payload: { text: "Arrived while reading" } }));
+  for (let index = 0; index < 20; index++) channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `earlier-${index}`,
+    createdAt: index, payload: { text: `Earlier replay ${index}` } }));
+  await expect(rows).toHaveCount(51);
+  await expect(page.getByTestId("message-history-30")).toHaveCount(1);
+  await expect(page.getByTestId("message-earlier-0")).toHaveCount(0);
+  await expect.poll(() => anchor.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(top, 0);
+  await expect(input).toBeFocused();
+  await expect(page.getByText("50 earlier messages available", { exact: true })).toHaveCount(1);
+  await page.getByRole("button", { name: "Load earlier messages", exact: true }).click();
+  await expect(rows).toHaveCount(101);
+  await expect(page.getByTestId("message-earlier-0")).toHaveCount(1);
+
+  await agent(page, "Other").click();
+  await expect(page.getByRole("textbox", { name: "Message Other", exact: true })).toHaveValue("");
+  await expect(rows).toHaveCount(50);
+  await expect(page.getByTestId("message-history-25")).toContainText("other history 25");
+  await expect(page.getByTestId("message-earlier-0")).toHaveCount(0);
+  await agent(page, "Live").click();
+  await expect(rows).toHaveCount(50);
+  await expect(page.getByTestId("message-history-31")).toHaveCount(1);
+  await expect(page.getByTestId("message-history-30")).toHaveCount(0);
+  await expect(input).toHaveValue("This conversation's draft");
+  await expect(page.getByTestId("message-history-80")).toBeInViewport();
+});
+
+test("blank reply bodies do not bury attachments or hide completed reply announcements", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep the next draft");
+  for (const [index, format] of ["markdown", "raw"].entries()) {
+    channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: format, createdAt: index,
+      payload: { text: " \n".repeat(300), format, attachments: [{ url: "https://example.com/report.pdf", name: "Report.pdf" }] } }));
+    const reply = page.getByTestId(`message-${format}`);
+    await expect(reply.getByRole("link", { name: "Report.pdf, opens in browser", exact: true })).toBeInViewport();
+    await expect.poll(() => reply.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(140);
+    await expect(page.getByText("Live replied: Report.pdf", { exact: true })).toHaveCount(1);
+  }
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "card", createdAt: 2,
+    payload: { text: "", card: { title: " \n".repeat(300), subtitle: "Next steps", text: " \n".repeat(300) } } }));
+  await expect(page.getByText("Live replied: Next steps", { exact: true })).toHaveCount(1);
+  await expect.poll(() => page.getByTestId("message-card").evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(140);
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "empty-stream", createdAt: 3, streaming: true,
+    payload: { text: " \n".repeat(300) } }));
+  const stream = page.getByTestId("message-empty-stream");
+  await expect(stream.getByTestId("message-text")).toContainText("▍");
+  await expect.poll(() => stream.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(140);
+  channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "empty-stream", interrupted: true }));
+  await expect(stream).toContainText("Reply stopped before any text arrived.");
+  await expect(page.getByText("Live stopped: Reply stopped before any text arrived.", { exact: true })).toHaveCount(1);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep the next draft");
+  await noOverflow(page);
+  await accessible(page);
+});
+
 for (const width of [1440, 320]) test(`expanding long tool details keeps their beginning visible while replies arrive (${width}px)`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 });
   let channel: WebSocketRoute | undefined;

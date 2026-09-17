@@ -20,22 +20,23 @@ export function ReplyContent({ message, replyTarget }: { message: ChatMessage; r
   const links = [...(message.actions ?? []), ...(card?.links ?? [])];
   const images = [...(card?.images ?? []), ...(card?.imageUrl ? [{ url: card.imageUrl, alt: "Card image" }] : [])];
   const quote = replyTarget?.text?.trim() || replyTarget?.card?.title || replyTarget?.attachments?.[0]?.name || "Earlier message";
-  const empty = !message.text?.trim() && !card && !message.attachments?.length && !links.length;
+  const hasText = !!message.text?.trim();
+  const empty = !hasText && !card && !message.attachments?.length && !links.length;
   return (
     <View testID="reply-content" className="min-w-0 max-w-full gap-2">
       {message.replyTo ? <View className="mb-1 max-w-full gap-1 border-l-2 border-accent-border pl-2">
         <Text className="text-[11px] font-semibold text-ink-secondary">{replyTarget ? replyTarget.role === "user" ? "Reply to you" : "Reply to agent" : "Reply to earlier message"}</Text>
         {replyTarget ? <Text className="text-[12px] text-ink-secondary" numberOfLines={2}>{quote}</Text> : null}
       </View> : null}
-      {message.text || message.streaming ? <RichText text={message.text ?? ""} streaming={message.streaming} raw={message.role === "user" || message.format === "raw"} /> : null}
+      {hasText || message.streaming ? <RichText text={hasText ? message.text! : ""} streaming={message.streaming} raw={message.role === "user" || message.format === "raw"} /> : null}
       {empty && !message.streaming ? <Text className="text-[13px] leading-5 text-ink-secondary">
         {message.interrupted ? "Reply stopped before any text arrived." : "No reply content was received."}
       </Text> : null}
       {card && hasCardBody ? (
         <View className="min-w-0 max-w-full gap-2 rounded-xl border border-hairline bg-inset p-3">
-          {card.title ? <Text className="text-[15px] font-semibold text-ink" selectable>{card.title}</Text> : null}
-          {card.subtitle ? <Text className="text-[12px] text-ink-secondary" selectable>{card.subtitle}</Text> : null}
-          {card.text && card.text !== message.text ? <RichText text={card.text} /> : null}
+          {card.title?.trim() ? <Text className="text-[15px] font-semibold text-ink" selectable>{card.title}</Text> : null}
+          {card.subtitle?.trim() ? <Text className="text-[12px] text-ink-secondary" selectable>{card.subtitle}</Text> : null}
+          {card.text?.trim() && card.text !== message.text ? <RichText text={card.text} /> : null}
           {card.fields?.map((field, index) => <View key={index} className="gap-1">
             <Text className="text-[11px] text-ink-secondary">{field.label}</Text>
             <Text testID="message-text" className="text-[13px] text-ink" selectable>{field.value}</Text>

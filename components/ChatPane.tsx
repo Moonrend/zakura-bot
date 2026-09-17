@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { ArrowDown, Menu, MessageCircle, Settings } from "lucide-react-native";
 import { useRouter } from "expo-router";
@@ -8,11 +8,15 @@ import { MessageBubble } from "./MessageBubble";
 import { Composer } from "./Composer";
 import { StatusBanner } from "./StatusBanner";
 import { formatDay, useStore } from "@/lib/store";
+import { previewFromMessages } from "@/lib/chat-state";
 import { useReducedMotion } from "@/lib/use-reduced-motion";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import type { ChatMessage } from "@/lib/types";
 
 const SUGGESTIONS = ["Say hello", "How do settings work?", "Run a slow reply", "help"];
+const HISTORY_PAGE_SIZE = 50;
+type HistoryStart = { agentId: string; id: string };
+type HistoryAnchor = { agentId: string; height: number; y: number; element?: HTMLElement; offset?: number };
 
 export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View> }) {
   const { agents, selectedId, messagesByAgent, typing, setSidebarOpen, retryMessage, send, connection, transportLabel } = useStore();
@@ -35,6 +39,26 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const lastScrollY = useRef(0);
   const viewportHeight = useRef(0);
   const contentHeight = useRef(0);
+  const [historyStart, setHistoryStart] = useState<HistoryStart | null>(null);
+  const [historyNotice, setHistoryNotice] = useState("");
+  const firstVisibleMessage = useRef<HistoryStart | null>(null);
+  const historyAnchor = useRef<HistoryAnchor | null>(null);
+  const recentStart = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
+  const rememberedStart = historyStart?.agentId === selectedId ? messages.findIndex((message) => message.id === historyStart.id) : -1;
+  const visibleStart = rememberedStart < 0 ? recentStart : Math.min(recentStart, rememberedStart);
+  const visibleMessages = useMemo(() => messages.slice(visibleStart), [messages, visibleStart]);
+
+  useLayoutEffect(() => {
+    firstVisibleMessage.current = visibleMessages[0] ? { agentId: selectedId, id: visibleMessages[0].id } : null;
+  }, [selectedId, visibleMessages]);
+
+  const keepVisibleHistory = useCallback(() => {
+    const first = firstVisibleMessage.current;
+    if (first?.agentId !== selectedId) return;
+    // Once someone reads or expands history, incoming messages must not evict
+    // the oldest visible row. Keep an identity, not a count that moves on append.
+    setHistoryStart((previous) => previous?.agentId === selectedId ? previous : first);
+  }, [selectedId]);
 
   const focusTranscript = useCallback(() => {
     if (Platform.OS === "web") {
@@ -70,9 +94,10 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const pauseForDetails = useCallback(() => {
     // Expanding a tool is a request to read from its beginning. The resulting
     // content resize and incoming replies must not scroll past the focused chip.
+    keepVisibleHistory();
     pinnedRef.current = false;
     setPinned(false);
-  }, []);
+  }, [keepVisibleHistory]);
 
   const followIfNearEnd = useCallback(() => {
     // Layout can grow the viewport without changing content or scroll offset
@@ -86,13 +111,24 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
 
   const onContentSizeChange = useCallback((_width: number, height: number) => {
     contentHeight.current = height;
+    const anchor = historyAnchor.current;
+    if (Platform.OS !== "web" && anchor?.agentId === selectedId) {
+      historyAnchor.current = null;
+      const y = Math.max(0, anchor.y + height - anchor.height);
+      lastScrollY.current = y;
+      scrollRef.current?.scrollTo({ y, animated: false });
+      return;
+    }
     // Short details and collapsing output can also bring the end into view.
     followIfNearEnd();
-  }, [followIfNearEnd]);
+  }, [followIfNearEnd, selectedId]);
 
   useEffect(() => {
     pinnedRef.current = true;
     lastScrollY.current = 0;
+    historyAnchor.current = null;
+    setHistoryStart(null);
+    setHistoryNotice("");
     setPinned(true);
     scrollToLatest();
   }, [selectedId, scrollToLatest]);
@@ -104,9 +140,45 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     // Growing content must not be mistaken for the user scrolling upwards.
     const next = distance < 80 ? true : contentOffset.y < lastScrollY.current - 1 ? false : pinnedRef.current;
     lastScrollY.current = contentOffset.y;
-    if (pinnedRef.current !== next) { pinnedRef.current = next; setPinned(next); }
-  }, []);
-  const rows = useMemo(() => buildRows(messages), [messages]);
+    if (pinnedRef.current !== next) {
+      if (!next) keepVisibleHistory();
+      pinnedRef.current = next;
+      setPinned(next);
+    }
+  }, [keepVisibleHistory]);
+  const rows = useMemo(() => buildRows(visibleMessages), [visibleMessages]);
+
+  const loadEarlier = () => {
+    if (!visibleStart || historyAnchor.current) return;
+    const node = Platform.OS === "web" ? scrollRef.current?.getScrollableNode() as HTMLElement | undefined : undefined;
+    const top = node?.getBoundingClientRect().top ?? 0;
+    const element = node ? Array.from(node.querySelectorAll<HTMLElement>('[data-testid^="transcript-row-"]'))
+      .find((row) => row.getBoundingClientRect().bottom > top) : undefined;
+    historyAnchor.current = { agentId: selectedId, height: node?.scrollHeight ?? contentHeight.current,
+      y: node?.scrollTop ?? lastScrollY.current, element, offset: element ? element.getBoundingClientRect().top - top : undefined };
+    const start = Math.max(0, visibleStart - HISTORY_PAGE_SIZE);
+    pauseForDetails();
+    setHistoryStart({ agentId: selectedId, id: messages[start].id });
+    setHistoryNotice(`${visibleStart - start} earlier messages loaded.`);
+    // The control moves above the inserted page, or disappears on the last
+    // page. Keyboard reading continues from the same place in the transcript.
+    focusTranscript();
+  };
+
+  useLayoutEffect(() => {
+    if (Platform.OS !== "web") return;
+    const anchor = historyAnchor.current;
+    if (!anchor || anchor.agentId !== selectedId) return;
+    historyAnchor.current = null;
+    const node = scrollRef.current?.getScrollableNode() as HTMLElement | undefined;
+    if (!node) return;
+    // Browser anchoring may already have moved the viewport. Measure the row
+    // itself so concurrent live appends are not counted as prepended history.
+    node.scrollTop = anchor.element?.isConnected && anchor.offset !== undefined
+      ? node.scrollTop + anchor.element.getBoundingClientRect().top - node.getBoundingClientRect().top - anchor.offset
+      : anchor.y + node.scrollHeight - anchor.height;
+    lastScrollY.current = node.scrollTop;
+  }, [rows, selectedId]);
   const replyTargets = useMemo(() => {
     const targets = new Map<string, ChatMessage>();
     for (const message of messages) {
@@ -117,6 +189,8 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     return targets;
   }, [messages]);
   const lastReply = [...messages].reverse().find((message) => message.role === "assistant" && message.kind === "text" && !message.streaming);
+  const lastReplySummary = lastReply ? previewFromMessages([lastReply]) ??
+    (lastReply.interrupted ? "Reply stopped before any text arrived." : "No reply content was received.") : undefined;
   const statusText = connection !== "connected" ? connection === "connecting" ? "Connecting…" : "Channel offline"
     : agent?.status === "offline" ? "Agent offline" : busy ? "Working…" : deliveryPending ? "Sending…" : `${transportLabel} · ${agent?.title ?? "Connected"}`;
 
@@ -165,6 +239,16 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
               keyboardDismissMode={Platform.OS === "web" ? "none" : Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
               contentContainerStyle={{ paddingTop: 8, paddingBottom: 20, paddingHorizontal: compact ? 12 : 24,
                 maxWidth: 900, width: "100%", alignSelf: "center", flexGrow: rows.length === 0 ? 1 : undefined }}>
+              {visibleStart > 0 || historyNotice ? <View className="mb-3 items-center gap-2">
+                {visibleStart > 0 ? <Pressable onPress={loadEarlier} accessibilityRole="button" accessibilityLabel="Load earlier messages"
+                  className="min-h-11 justify-center rounded-xl border border-hairline bg-panel px-4 py-3 active:bg-raised">
+                  <Text className="text-[13px] text-ink">Load earlier messages</Text>
+                </Pressable> : null}
+                <Text accessibilityLiveRegion="polite" className="text-center text-[11px] leading-4 text-ink-secondary">
+                  {historyNotice ? `${historyNotice} ${visibleStart ? `${visibleStart} more available.` : "All available history is shown."}`
+                    : `${visibleStart} earlier messages available`}
+                </Text>
+              </View> : null}
               {rows.length === 0 ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"}
                 disabled={connection !== "connected" || agent.status === "offline" || busy}
                 onSuggest={(text) => void send(text, agent.id)} onFocusLost={focusTranscript} /> : null}
@@ -174,11 +258,13 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
                   <Text className="text-[11px] text-ink-secondary">{row.label}</Text>
                   <View className="h-px flex-1 bg-hairline/70" />
                 </View>
-              ) : <MessageBubble key={`message_${row.message.id}`} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
+              ) : <View key={`message_${row.message.id}`} testID={`transcript-row-${row.message.id}`}>
+                <MessageBubble message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
                 onExpandDetails={pauseForDetails}
                 replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
                 retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
-                onRetry={(id) => void retryMessage(id)} onRetryFocusLost={focusTranscript} />)}
+                onRetry={(id) => void retryMessage(id)} onRetryFocusLost={focusTranscript} />
+              </View>)}
               {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
                 <TypingDots reducedMotion={reducedMotion} /><Text className="min-w-0 flex-1 text-[12px] text-ink-secondary" numberOfLines={1}>{agent.name} is working…</Text>
               </View> : null}
@@ -195,7 +281,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
             </Pressable> : null}
           </View>
           <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
-            {busy ? `${agent.name} is replying.` : lastReply ? `${agent.name}${lastReply.interrupted ? " stopped" : " replied"}: ${lastReply.text ?? lastReply.card?.title ?? "Attachment"}` : "Ready for your message."}
+            {busy ? `${agent.name} is replying.` : lastReply ? `${agent.name}${lastReply.interrupted ? " stopped" : " replied"}: ${lastReplySummary}` : "Ready for your message."}
           </Text>
           <Composer agentName={agent.name} busy={busy} deliveryPending={deliveryPending}
             agentOffline={agent.status === "offline"} bottomInset={insets.bottom} onSubmit={() => pinToLatest()} />
