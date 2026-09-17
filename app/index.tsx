@@ -5,6 +5,7 @@ import { AgentSidebar } from "@/components/AgentSidebar";
 import { ChatPane } from "@/components/ChatPane";
 import { useStore } from "@/lib/store";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
+import { useScreenFocus } from "@/lib/use-screen-focus";
 
 export default function HomeScreen() {
   const { width, height } = useWindowDimensions();
@@ -15,8 +16,14 @@ export default function HomeScreen() {
   const [query, setQuery] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const filters = { query, setQuery, unreadOnly, setUnreadOnly };
+  const screenRef = useRef<View>(null);
   const desktopSidebarRef = useRef<View | null>(null);
   const agentListButtonRef = useRef<View | null>(null);
+  const conversationFocusTarget = useCallback(() => {
+    const screen = screenRef.current as unknown as HTMLElement | null;
+    return screen?.querySelector<HTMLElement>('[data-testid="chat-transcript"], [role="region"][aria-label="Channel setup"]');
+  }, []);
+  useScreenFocus(screenRef, conversationFocusTarget, settingsReady);
   const restoreSidebarFocus = useCallback(() => {
     if (Platform.OS !== "web") return;
     const sidebar = desktopSidebarRef.current as unknown as HTMLElement | null;
@@ -54,7 +61,7 @@ export default function HomeScreen() {
   }
 
   return (
-    <View className="flex-1 flex-row bg-app">
+    <View ref={screenRef} className="flex-1 flex-row bg-app">
       {!compact ? (
         <View ref={setDesktopSidebarRef} className="w-80 shrink-0">
           <AgentSidebar {...filters} />

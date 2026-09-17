@@ -16,6 +16,79 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+for (const width of [1440, 320]) test(`settings navigation restores keyboard focus and keeps drafts (${width}px)`, async ({ page }) => {
+  await mockReady(page);
+  await page.setViewportSize({ width, height: 844 });
+  const input = page.getByRole("textbox", { name: "Message Zakura", exact: true });
+  await input.fill("Keep this draft across settings");
+  const menu = page.getByRole("button", { name: "Open agent list", exact: true });
+  const openSettings = page.getByRole("button", { name: "Open settings", exact: true });
+  const heading = page.getByRole("heading", { name: "Your connection", exact: true });
+  for (const back of [false, true]) {
+    if (width < 768) await menu.press("Enter");
+    await openSettings.press("Enter");
+    await expect(heading).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("switch", { name: "Use mock channel", exact: true })).toBeFocused();
+    if (back) await page.goBack();
+    else await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
+    await expect(width < 768 ? menu : openSettings).toBeFocused();
+    await expect(input).toHaveValue("Keep this draft across settings");
+  }
+  await noOverflow(page);
+  await accessible(page);
+});
+
+test("settings returns to the conversation when channel recovery removes its opener", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false,
+  })), { key: settingsKey });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open connection settings", exact: true }).press("Enter");
+  await expect(page.getByRole("heading", { name: "Your connection", exact: true })).toBeFocused();
+  channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "idle" }] }));
+  await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
+  await expect(page.getByTestId("chat-transcript")).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "Message Live", exact: true })).toBeVisible();
+});
+
+test("direct settings visits enter at the heading and close into keyboard-accessible chat", async ({ page }) => {
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Your connection", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
+  await expect(page.getByTestId("chat-transcript")).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "Message Zakura", exact: true })).toHaveValue("");
+});
+
+test("saving settings keeps keyboard navigation through success and storage failure", async ({ page }) => {
+  await page.goto("/settings");
+  const save = page.getByRole("button", { name: "Save settings", exact: true });
+  const actions = page.getByRole("group", { name: "Settings actions", exact: true });
+  await save.press("Enter");
+  await expect(page.getByText("Settings saved on this device.", { exact: true })).toBeVisible();
+  await expect(actions).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(save).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Close settings", exact: true })).toBeFocused();
+
+  await page.getByRole("textbox", { name: "Zakura Base URL", exact: true }).fill("https://example.com/");
+  await page.evaluate(() => { Storage.prototype.setItem = () => { throw new Error("Storage unavailable"); }; });
+  await save.press("Enter");
+  await expect(page.getByRole("alert")).toContainText("Storage unavailable");
+  await expect(actions).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(save).toBeFocused();
+  await accessible(page);
+});
+
 for (const width of [1440, 320]) test(`selecting reply text pauses following until reading resumes (${width}px)`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 });
   let channel: WebSocketRoute | undefined;

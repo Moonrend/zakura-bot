@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { Check, Save } from "lucide-react-native";
 import { useRouter } from "expo-router";
@@ -7,6 +7,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStore } from "@/lib/store";
 import { validateLiveSettings } from "@/lib/channel";
 import { DEFAULT_SETTINGS } from "@/lib/types";
+import { useScreenFocus } from "@/lib/use-screen-focus";
+import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 
 export default function SettingsScreen() {
   const { settings, settingsReady, updateSettings, connection, transportLabel } = useStore();
@@ -19,6 +21,15 @@ export default function SettingsScreen() {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const screenRef = useRef<ScrollView>(null);
+  const headingRef = useRef<Text>(null);
+  const headingFocusTarget = useCallback(() => headingRef.current as unknown as HTMLElement | null, []);
+  useScreenFocus(screenRef, headingFocusTarget);
+  const actionsRef = useRef<View>(null);
+  const focusActions = useCallback(() => {
+    if (Platform.OS === "web") (actionsRef.current as unknown as HTMLElement | null)?.focus({ preventScroll: true });
+  }, []);
+  const saveRef = useFocusOnRemoval(focusActions);
 
   useEffect(() => {
     if (!settingsReady || dirty) return;
@@ -48,10 +59,11 @@ export default function SettingsScreen() {
   const close = () => router.canGoBack() ? router.back() : router.replace("/");
 
   return (
-    <ScrollView className="flex-1 bg-app" keyboardShouldPersistTaps="handled"
+    <ScrollView ref={screenRef} className="flex-1 bg-app" keyboardShouldPersistTaps="handled"
       contentContainerStyle={{ padding: 20, paddingBottom: Math.max(insets.bottom, 20), width: "100%", maxWidth: 680, alignSelf: "center" }}>
       <Head><title>Settings · Zakura Bot</title></Head>
-      <Text className="mb-2 text-[20px] font-semibold text-ink" accessibilityRole="header">Your connection</Text>
+      <Text ref={headingRef} {...(Platform.OS === "web" ? { tabIndex: -1 } : {})}
+        className="mb-2 text-[20px] font-semibold text-ink" accessibilityRole="header">Your connection</Text>
       <Text className="mb-6 text-[14px] leading-6 text-ink-secondary">
         {settingsReady ? `${transportLabel} channel · ${connection}` : "Loading saved settings…"}
       </Text>
@@ -80,17 +92,20 @@ export default function SettingsScreen() {
       {error ? <View className="mb-4 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3" accessibilityRole="alert" accessibilityLiveRegion="polite">
         <Text className="text-[13px] leading-5 text-danger">{error}</Text>
       </View> : null}
-      <Pressable onPress={() => void onSave()} disabled={!settingsReady || saving}
-        accessibilityRole="button" accessibilityLabel="Save settings" aria-busy={saving} accessibilityState={{ disabled: !settingsReady || saving, busy: saving }}
-        className="min-h-11 flex-row items-center justify-center gap-2 rounded-xl bg-accent py-3.5 active:opacity-80">
-        {saving ? <ActivityIndicator size="small" color="#070707" /> : saved ? <Check size={18} color="#070707" /> : <Save size={17} color="#070707" />}
-        <Text className="text-[15px] font-semibold text-app">{saving ? "Saving…" : saved ? "Saved" : "Save settings"}</Text>
-      </Pressable>
-      <Text accessibilityLiveRegion="polite" className="mt-2 text-center text-[12px] text-ink-secondary">{saved ? "Settings saved on this device." : " "}</Text>
-      <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Close settings"
-        className="mt-2 min-h-11 items-center justify-center rounded-xl py-3 active:bg-panel">
-        <Text className="text-[14px] text-ink-secondary">Close</Text>
-      </Pressable>
+      <View ref={actionsRef} tabIndex={Platform.OS === "web" ? -1 : undefined}
+        role={Platform.OS === "web" ? "group" : undefined} accessibilityLabel="Settings actions">
+        <Pressable ref={saveRef} onPress={() => void onSave()} disabled={!settingsReady || saving}
+          accessibilityRole="button" accessibilityLabel="Save settings" aria-busy={saving} accessibilityState={{ disabled: !settingsReady || saving, busy: saving }}
+          className="min-h-11 flex-row items-center justify-center gap-2 rounded-xl bg-accent py-3.5 active:opacity-80">
+          {saving ? <ActivityIndicator size="small" color="#070707" /> : saved ? <Check size={18} color="#070707" /> : <Save size={17} color="#070707" />}
+          <Text className="text-[15px] font-semibold text-app">{saving ? "Saving…" : saved ? "Saved" : "Save settings"}</Text>
+        </Pressable>
+        <Text accessibilityLiveRegion="polite" className="mt-2 text-center text-[12px] text-ink-secondary">{saved ? "Settings saved on this device." : " "}</Text>
+        <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Close settings"
+          className="mt-2 min-h-11 items-center justify-center rounded-xl py-3 active:bg-panel">
+          <Text className="text-[14px] text-ink-secondary">Close</Text>
+        </Pressable>
+      </View>
       <Text className="mt-6 text-[12px] leading-5 text-ink-secondary">
         {Platform.OS === "web" ? "The URL and token are stored in this browser." : "The URL and token are stored locally on this device."} Drafts reset when you reload or switch channels. Live message history is restored from your server on reconnect.
       </Text>
