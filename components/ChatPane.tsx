@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
 import { MessageBubble } from "./MessageBubble";
+import { ActivityChip } from "./ActivityChip";
 import { Composer } from "./Composer";
 import { StatusBanner } from "./StatusBanner";
 import { formatDay, useStore } from "@/lib/store";
@@ -13,18 +14,24 @@ import { useReducedMotion } from "@/lib/use-reduced-motion";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { UPLOAD_NOTICE } from "@/lib/use-file-drop-guard";
 import type { ChatMessage } from "@/lib/types";
+import { interactionPending } from "@/lib/interactions";
 
-const SUGGESTIONS = ["Say hello", "How do settings work?", "Run a slow reply", "help"];
+const EMPTY_MESSAGES: ChatMessage[] = [];
 const HISTORY_PAGE_SIZE = 50;
 type HistoryStart = { agentId: string; id: string };
 type HistoryAnchor = { agentId: string; height: number; y: number; element?: HTMLElement; offset?: number };
 
 export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View> }) {
-  const { agents, selectedId, messagesByAgent, typing, setSidebarOpen, retryMessage, send, connection, transportLabel } = useStore();
+  const { agents, selectedId, messagesByAgent, typing, setSidebarOpen, retryMessage, connection } = useStore();
   const agent = agents.find((item) => item.id === selectedId);
-  const messages = messagesByAgent[selectedId] ?? [];
+  const allMessages = messagesByAgent[selectedId] ?? EMPTY_MESSAGES;
+  // Tool events never become transcript rows, dates, quotes or history pages.
+  const messages = useMemo(() => allMessages.filter((message) => message.kind !== "activity"), [allMessages]);
+  const activeTool = [...allMessages].reverse().find((message) => message.kind === "activity" &&
+    message.tool && message.tool.ok === undefined && !message.tool.interrupted)?.tool;
   const busy = !!typing[selectedId];
   const deliveryPending = messages.some((message) => message.pending);
+  const pendingRequests = messages.filter((message) => message.interaction && interactionPending(message.interaction));
   const scrollRef = useRef<ScrollView>(null);
   const scrollFrame = useRef<number | null>(null);
   const { width, height } = useWindowDimensions();
@@ -50,6 +57,8 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   }, [selectedId]);
   const firstVisibleMessage = useRef<HistoryStart | null>(null);
   const historyAnchor = useRef<HistoryAnchor | null>(null);
+  const requestPositions = useRef(new Map<string, number>());
+  const requestToReveal = useRef<string | null>(null);
   const recentStart = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
   const rememberedStart = historyStart?.agentId === selectedId ? messages.findIndex((message) => message.id === historyStart.id) : -1;
   const visibleStart = rememberedStart < 0 ? recentStart : Math.min(recentStart, rememberedStart);
@@ -111,6 +120,22 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     setPinned(false);
   }, [keepVisibleHistory]);
 
+  const scrollToRequest = useCallback((id: string) => {
+    const y = requestPositions.current.get(id);
+    if (y === undefined) return;
+    requestToReveal.current = null;
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: false });
+  }, []);
+  const reviewRequest = () => {
+    const message = pendingRequests[0];
+    if (!message) return;
+    pauseFollowing();
+    requestToReveal.current = message.id;
+    const index = messages.findIndex((item) => item.id === message.id);
+    if (index < visibleStart) setHistoryStart({ agentId: selectedId, id: message.id });
+    else scrollToRequest(message.id);
+  };
+
   useEffect(() => {
     if (Platform.OS !== "web") return;
     const node = scrollRef.current?.getScrollableNode() as HTMLElement | undefined;
@@ -151,7 +176,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
       scrollRef.current?.scrollTo({ y, animated: false });
       return;
     }
-    // Short details and collapsing output can also bring the end into view.
+    // A disappearing activity pill can also bring the end into view.
     followIfNearEnd();
   }, [followIfNearEnd, selectedId]);
 
@@ -160,6 +185,8 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     pinnedRef.current = true;
     lastScrollY.current = 0;
     historyAnchor.current = null;
+    requestPositions.current.clear();
+    requestToReveal.current = null;
     setHistoryStart(null);
     setHistoryNotice("");
     setAttachmentNoticeAgent(null);
@@ -244,10 +271,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     return targets;
   }, [messages]);
   const lastReply = [...messages].reverse().find((message) => message.role === "assistant" && message.kind === "text" && !message.streaming);
-  const lastReplySummary = lastReply ? previewFromMessages([lastReply]) ??
-    (lastReply.interrupted ? "Reply stopped before any text arrived." : "No reply content was received.") : undefined;
-  const statusText = connection !== "connected" ? connection === "connecting" ? "Connecting…" : "Channel offline"
-    : agent?.status === "offline" ? "Agent offline" : busy ? "Working…" : deliveryPending ? "Sending…" : `${transportLabel} · ${agent?.title ?? "Connected"}`;
+  const lastReplySummary = lastReply ? previewFromMessages([lastReply]) ?? (lastReply.interrupted ? "Stopped" : "Empty reply") : undefined;
 
   return (
     <KeyboardAvoidingView className="min-w-0 flex-1 bg-app" behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}>
@@ -258,7 +282,6 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
         {agent ? <BlobAvatar color={agent.color} name={agent.name} size={34} /> : <MessageCircle size={28} color="#459ffe" />}
         <View className="min-w-0 flex-1">
           <Text className="text-[15px] font-semibold text-ink" numberOfLines={1} accessibilityRole="header">{agent?.name ?? "Zakura Bot"}</Text>
-          <Text className="mt-1 text-[11px] text-ink-secondary" numberOfLines={1}>{statusText}</Text>
         </View>
         {agent ? <Pressable onPress={() => router.push({ pathname: "/desktop", params: { agentId: agent.id } })} accessibilityRole="button" accessibilityLabel="View bot desktop"
           className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"><Monitor size={20} color="#fcfcfc" /></Pressable> : null}
@@ -275,14 +298,10 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ flexGrow: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingVertical: 32 }}>
             <MessageCircle size={40} color="#b3b3b3" />
-            <Text className="mt-5 text-center text-[20px] font-semibold text-ink">{connection === "connecting" ? "Connecting your agents…" : "No agents available"}</Text>
-            <Text className="mt-3 max-w-sm text-center text-[14px] leading-6 text-ink-secondary">
-              {connection === "connected" ? "Your channel has no agents yet. Check the agents assigned to your account."
-                : "Open Settings to connect your channel, or try the demo with the mock channel."}
-            </Text>
+            <Text className="mt-5 text-center text-[20px] font-semibold text-ink">{connection === "connecting" ? "Connecting…" : "No bots yet"}</Text>
             <Pressable onPress={() => router.push("/settings")} accessibilityRole="button" accessibilityLabel="Open connection settings"
               className="mt-6 min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-raised px-4 py-3 active:bg-raised-hover">
-              <Settings size={16} color="#fcfcfc" /><Text className="text-[14px] text-ink">Connection settings</Text>
+              <Settings size={16} color="#fcfcfc" /><Text className="text-[14px] text-ink">Settings</Text>
             </Pressable>
           </ScrollView>
         ) : <>
@@ -302,32 +321,30 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
               {visibleStart > 0 || historyNotice ? <View className="mb-3 items-center gap-2">
                 {visibleStart > 0 ? <Pressable onPress={loadEarlier} accessibilityRole="button" accessibilityLabel="Load earlier messages"
                   className="min-h-11 justify-center rounded-xl border border-hairline bg-panel px-4 py-3 active:bg-raised">
-                  <Text className="text-[13px] text-ink">Load earlier messages</Text>
+                  <Text className="text-[13px] text-ink">Earlier messages</Text>
                 </Pressable> : null}
-                <Text accessibilityLiveRegion="polite" className="text-center text-[11px] leading-4 text-ink-secondary">
-                  {historyNotice ? `${historyNotice} ${visibleStart ? `${visibleStart} more available.` : "All available history is shown."}`
-                    : `${visibleStart} earlier messages available`}
+                <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
+                  {historyNotice}
                 </Text>
               </View> : null}
-              {rows.length === 0 ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"}
-                disabled={connection !== "connected" || agent.status === "offline" || busy}
-                onSuggest={(text) => void send(text, agent.id)} onFocusLost={focusTranscript} /> : null}
+              {rows.length === 0 && !activeTool ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"} /> : null}
               {rows.map((row) => row.kind === "day" ? (
                 <View key={row.key} className="my-3 flex-row items-center gap-3">
                   <View className="h-px flex-1 bg-hairline/70" />
                   <Text className="text-[11px] text-ink-secondary">{row.label}</Text>
                   <View className="h-px flex-1 bg-hairline/70" />
                 </View>
-              ) : <View key={`message_${row.message.id}`} testID={`transcript-row-${row.message.id}`}>
+              ) : <View key={`message_${row.message.id}`} testID={`transcript-row-${row.message.id}`}
+                onLayout={row.message.interaction ? (event) => {
+                  requestPositions.current.set(row.message.id, event.nativeEvent.layout.y);
+                  if (requestToReveal.current === row.message.id) scrollToRequest(row.message.id);
+                } : undefined}>
                 <MessageBubble message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
-                onExpandDetails={pauseFollowing}
                 replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
                 retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
                 onRetry={(id) => void retryMessage(id)} onFocusLost={focusTranscript} />
               </View>)}
-              {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
-                <TypingDots reducedMotion={reducedMotion} /><Text className="min-w-0 flex-1 text-[12px] text-ink-secondary" numberOfLines={1}>{agent.name} is working…</Text>
-              </View> : null}
+              {activeTool ? <ActivityChip tool={activeTool} reducedMotion={reducedMotion} /> : null}
             </ScrollView>
             {!pinned ? <Pressable ref={setJumpRef} onPress={() => {
               pinToLatest(true);
@@ -344,6 +361,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
             {busy ? `${agent.name} is replying.` : lastReply ? `${agent.name}${lastReply.interrupted ? " stopped" : " replied"}: ${lastReplySummary}` : "Ready for your message."}
           </Text>
           <Composer agentName={agent.name} busy={busy} deliveryPending={deliveryPending}
+            pendingRequests={pendingRequests.length} onReviewRequest={reviewRequest}
             attachmentNotice={attachmentNotice} setAttachmentNotice={setAttachmentNotice}
             agentOffline={agent.status === "offline"} bottomInset={insets.bottom} onSubmit={() => pinToLatest()} />
         </>}
@@ -368,36 +386,14 @@ function buildRows(messages: ChatMessage[]): Row[] {
   return rows;
 }
 
-function EmptyThread({ name, color, offline, disabled, onSuggest, onFocusLost }: {
-  name: string; color: string; offline: boolean; disabled: boolean; onSuggest: (text: string) => void; onFocusLost: () => void;
+function EmptyThread({ name, color, offline }: {
+  name: string; color: string; offline: boolean;
 }) {
-  const setRef = useFocusOnRemoval(onFocusLost);
   return (
     <View className="flex-1 items-center justify-center px-4 py-12">
       <BlobAvatar color={color} name={name} size={64} />
-      <Text className="mt-5 w-full text-center text-[20px] font-semibold text-ink" numberOfLines={2}>{offline ? `${name} is offline` : `Say hello to ${name}`}</Text>
-      <Text className="mt-2 max-w-sm text-center text-[14px] leading-6 text-ink-secondary">
-        {offline ? "You can write a draft here. Sending becomes available when this agent is online." : "A new conversation starts with a message."}
-      </Text>
-      {!offline ? <View ref={setRef} className="mt-6 flex-row flex-wrap justify-center gap-2">
-        {SUGGESTIONS.map((suggestion) => <Pressable key={suggestion} onPress={() => onSuggest(suggestion)} disabled={disabled}
-          accessibilityRole="button" accessibilityState={{ disabled }}
-          className="min-h-11 justify-center rounded-full border border-hairline bg-panel px-4 py-3 active:bg-raised">
-          <Text className="text-[13px] text-ink">{suggestion}</Text>
-        </Pressable>)}
-      </View> : null}
+      <Text className="mt-5 w-full text-center text-[20px] font-semibold text-ink" numberOfLines={2}>{name}</Text>
+      {offline ? <Text className="mt-2 text-[13px] text-ink-secondary">Offline</Text> : null}
     </View>
   );
-}
-
-function TypingDots({ reducedMotion }: { reducedMotion: boolean }) {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    if (reducedMotion) return;
-    const timer = setInterval(() => setTick((value) => (value + 1) % 3), 350);
-    return () => clearInterval(timer);
-  }, [reducedMotion]);
-  return <View className="flex-row items-center gap-1" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-    {[0, 1, 2].map((index) => <View key={index} className="h-1.5 w-1.5 rounded-full bg-ink" style={{ opacity: reducedMotion || tick === index ? 0.75 : 0.3 }} />)}
-  </View>;
 }

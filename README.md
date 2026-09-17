@@ -4,6 +4,8 @@ A cross-platform Zakura client for iOS, Android and web. Connect your own instan
 
 ## Status
 
+UI mirrors Grok Bot minimalism (tools as tiny pills only).
+
 | Product capability | Progress |
 | --- | --- |
 | Zakura login | **Implemented**: browser device authorization, tenant binding consent, rotating refresh credentials, native SecureStore, logout and multiple instances |
@@ -11,7 +13,7 @@ A cross-platform Zakura client for iOS, Android and web. Connect your own instan
 | Sidebar groups | **Implemented**: create, rename, sort, assign bots and persist per instance on this device |
 | Send files | **Implemented**: photo/file picker, paste/drop on web, uploads with retry, attachment-only sends, image previews and authenticated downloads |
 | View desktop | **Implemented**: conversation desktop page, authenticated screenshots, refresh, automatic updates and capture recovery |
-| Special messages | Existing: tool activity, errors, system notices, quotes and cards; interactive approval/question support next |
+| Special messages | Tiny activity pills while running; compact approval/question cards, errors, notices and quotes |
 
 The matching server changes are in [Zakura PR #15](https://github.com/Moonrend/Zakura/pull/15), branch `feat/zakurabot-channel`. Both repositories must be deployed for browser authorization. Production model/device use and native installation have not been verified against a deployed instance.
 

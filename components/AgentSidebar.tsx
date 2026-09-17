@@ -122,9 +122,6 @@ export function AgentSidebar({ query, setQuery, unreadOnly, setUnreadOnly }: {
               <Text className="mt-3 w-full text-center text-[14px] font-semibold text-ink" numberOfLines={2}>
                 {query.trim() ? `No matches for “${query.trim()}”` : agents.length === 0 ? "No agents connected" : "All caught up"}
               </Text>
-              <Text className="mt-2 text-center text-[12px] leading-5 text-ink-secondary">
-                {query.trim() ? "Try another name or clear your search." : agents.length === 0 ? "Check your channel in Settings." : "New replies will appear here."}
-              </Text>
             </View>
           ) : null}
           {groupedAgents(visible, groups).map((section) => <View key={section.id} testID={`sidebar-group-${section.id}`}>

@@ -2,10 +2,10 @@
  * In-memory mock of ZakuraChannelClient.
  *
  * Exercises the optional streaming extension of the `zakurabot` contract:
- *   user message echo → typing → tool chip (chat_reply) → streamed reply → done.
+ *   user message echo → typing → quiet Working… activity → streamed reply → done.
  *
  * Triggers for testing UI states:
- *   - text containing "fail"  → the tool chip fails and an error event is emitted
+ *   - text containing "fail"  → activity fails (pill disappears) and an error event is emitted
  *   - text containing "slow"  → longer stream (useful for testing Stop)
  */
 
@@ -258,7 +258,7 @@ function mockReplyFor(userText: string, slow: boolean): string {
     return (
       "这是一条较长的模拟回复，用来测试 Stop 按钮与流式渲染。" +
       "Zakura 远程会话里，agent 每次对用户可见的输出都必须调用 `chat_reply`；" +
-      "本客户端把这些调用渲染为气泡，把工具运行过程渲染为 activity chip。" +
+      "本客户端只把 chat_reply 渲染为气泡，运行中最多显示 Working…，不会展开工具名或详情。" +
       "你可以随时点击右侧的停止按钮中断本轮回复。" +
       "\n\nThe stream will keep going for a few more seconds so you can try interrupting it. " +
       "Interrupted replies keep the text received so far and are marked as stopped."
@@ -271,7 +271,7 @@ function mockReplyFor(userText: string, slow: boolean): string {
     return "先在 Zakura 给 Agent 添加 Zakura Bot 绑定并创建设备。再打开左下角 Settings，填写设备的 Base URL 与 Token，关闭「Use mock channel」。没有配置服务器时，可以继续使用演示模式。";
   }
   if (t.includes("help") || t.includes("帮助")) {
-    return "试试这些：\n• 发送包含 “slow” 的消息 → 长流式回复，测试 Stop\n• 发送包含 “fail” 的消息 → 工具失败态与错误横幅\n• 切换 agent 看未读小点与预览更新";
+    return "试试这些：\n• 发送包含 “slow” 的消息 → 长流式回复，测试 Stop\n• 发送包含 “fail” 的消息 → 错误横幅（不展示工具名）\n• 切换 agent 看未读小点与预览更新";
   }
   return `收到：「${userText.slice(0, 200)}」\n\n这是 mock 流式回复。真正绑定后，Zakura 会在远程会话里调用 \`chat_reply\`，把可见消息推送到本客户端。`;
 }
@@ -299,40 +299,24 @@ export function createDemoMessages(agentId: string): ChatMessage[] {
       id: "demo_3",
       agentId,
       role: "assistant",
-      kind: "activity",
-      tool: { name: "workspace.search", ok: true, detail: "Checked the demo workspace" },
-      createdAt: now - 85_000,
+      kind: "text",
+      text: "You're in **demo mode**. Try a conversation, switch between agents, and watch replies arrive. Visible answers always come from `chat_reply` — never from raw model text. Configure a live connection in Settings when ready.",
+      createdAt: now - 80_000,
     },
     {
       id: "demo_4",
       agentId,
-      role: "assistant",
+      role: "user",
       kind: "text",
-      text: "You're in **demo mode**. Try a conversation, switch between agents, and watch replies arrive. You can configure a live connection in Settings when your server supports it.",
-      createdAt: now - 80_000,
+      text: "How do replies look while you work?",
+      createdAt: now - 40_000,
     },
     {
       id: "demo_5",
       agentId,
-      role: "user",
-      kind: "text",
-      text: "Show me a tool chip while you think.",
-      createdAt: now - 40_000,
-    },
-    {
-      id: "demo_6",
-      agentId,
-      role: "assistant",
-      kind: "activity",
-      tool: { name: "chat_reply", ok: true },
-      createdAt: now - 35_000,
-    },
-    {
-      id: "demo_7",
-      agentId,
       role: "assistant",
       kind: "text",
-      text: "Send a message below to try a streaming reply. Include **slow** to try Stop, or **fail** to see how errors appear. Click a tool chip to see its details.",
+      text: "Send a message below to try a streaming reply. Include **slow** to try Stop, or **fail** to see how errors appear. While working you may briefly see Working… — no tool names or expandable details.",
       createdAt: now - 30_000,
     },
   ];

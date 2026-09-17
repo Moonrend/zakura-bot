@@ -6,16 +6,19 @@ import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { ExternalLink } from "./ExternalLink";
 import { RichText } from "./RichText";
 import { AttachmentCard } from "./AttachmentCard";
+import { InteractionCard } from "./InteractionCard";
 
-function keyedLinks(links: MessageLink[]) {
+function keyedItems<T>(items: T[], identify: (item: T) => unknown) {
   const counts = new Map<string, number>();
-  return links.map((link) => {
-    const identity = JSON.stringify([link.url, link.label]);
+  return items.map((item) => {
+    const identity = JSON.stringify(identify(item));
     const occurrence = counts.get(identity) ?? 0;
     counts.set(identity, occurrence + 1);
-    return { link, key: JSON.stringify([identity, occurrence]) };
+    return { item, key: JSON.stringify([identity, occurrence]) };
   });
 }
+
+const keyedLinks = (links: MessageLink[]) => keyedItems(links, (link) => [link.url, link.label]);
 
 /** Render the complete chat_reply content, including device-scoped attachments. */
 export function ReplyContent({ message, replyTarget, onFocusLost }: {
@@ -26,17 +29,18 @@ export function ReplyContent({ message, replyTarget, onFocusLost }: {
     // ScrollView exposes a component ref; focus belongs to its scrollable node.
     if (Platform.OS === "web") setTableRemovalRef(node?.getScrollableNode() ?? null);
   }, [setTableRemovalRef]);
-  const card = message.card;
+  if (message.kind === "activity") return null;
+  const card = message.interaction ? undefined : message.card;
   // Media and URL buttons are rendered below. A card containing only those
   // links (or body text already shown above) does not need an empty body panel.
   const hasCardBody = card && (card.title?.trim() || card.subtitle?.trim() ||
     (card.text !== message.text && card.text?.trim()) || card.fields?.some((field) => field.label.trim() || field.value.trim()) ||
     card.table?.headers.some((cell) => cell.trim()) || card.table?.rows.some((row) => row.some((cell) => cell.trim())));
-  const links = [...(message.actions ?? []), ...(card?.links ?? [])];
+  const links = message.interaction ? [] : [...(message.actions ?? []), ...(card?.links ?? [])];
   const images = [...(card?.images ?? []), ...(card?.imageUrl ? [{ url: card.imageUrl, alt: "Card image" }] : [])];
   const quote = replyTarget ? messageContentPreview(replyTarget) ?? "Earlier message" : undefined;
-  const hasText = !!message.text?.trim();
-  const empty = !hasText && !card && !message.attachments?.length && !links.length;
+  const hasText = !!message.text?.trim() && !message.interaction;
+  const empty = !hasText && !card && !message.interaction && !message.attachments?.length && !links.length;
   return (
     <View testID="reply-content" className="min-w-0 max-w-full gap-2">
       {message.replyTo ? <View className="mb-1 max-w-full gap-1 border-l-2 border-accent-border pl-2">
@@ -45,8 +49,9 @@ export function ReplyContent({ message, replyTarget, onFocusLost }: {
       </View> : null}
       {hasText || message.streaming ? <RichText text={hasText ? message.text! : ""} streaming={message.streaming}
         raw={message.role === "user" || message.format === "raw"} onFocusLost={onFocusLost} /> : null}
+      {message.interaction ? <InteractionCard message={{ ...message, interaction: message.interaction }} /> : null}
       {empty && !message.streaming ? <Text className="text-[13px] leading-5 text-ink-secondary">
-        {message.interrupted ? "Reply stopped before any text arrived." : "No reply content was received."}
+        {message.interrupted ? "Stopped" : "Empty reply"}
       </Text> : null}
       {card && hasCardBody ? (
         <View className="min-w-0 max-w-full gap-2 rounded-xl border border-hairline bg-inset p-3">
@@ -72,10 +77,11 @@ export function ReplyContent({ message, replyTarget, onFocusLost }: {
           </ScrollView> : null}
         </View>
       ) : null}
-      {message.attachments?.map((file, index) => <AttachmentCard key={`${file.id ?? file.url}:${index}`} file={file} agentId={message.agentId} onFocusLost={onFocusLost} />)}
-      {keyedLinks(images.map((item) => ({ url: item.url, label: item.alt || "Open image" }))).map(({ link, key }) =>
+      {keyedItems(message.attachments ?? [], (file) => [file.id ?? file.url, file.name]).map(({ item: file, key }) =>
+        <AttachmentCard key={key} file={file} agentId={message.agentId} onFocusLost={onFocusLost} />)}
+      {keyedLinks(images.map((item) => ({ url: item.url, label: item.alt || "Open image" }))).map(({ item: link, key }) =>
         <ExternalLink key={key} {...link} buttonStyle="default" onFocusLost={onFocusLost} />)}
-      {keyedLinks(links).map(({ link, key }) =>
+      {keyedLinks(links).map(({ item: link, key }) =>
         <ExternalLink key={key} url={link.url} label={link.label} buttonStyle={link.style ?? "default"} onFocusLost={onFocusLost} />)}
     </View>
   );

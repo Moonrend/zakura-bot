@@ -85,7 +85,6 @@ export default function SettingsScreen() {
       <View className="mb-6 flex-row items-center justify-between rounded-2xl border border-hairline bg-panel px-4 py-4">
         <View className="mr-4 min-w-0 flex-1">
           <Text className="text-[15px] font-semibold text-ink">Use mock channel</Text>
-          <Text className="mt-1 text-[13px] leading-5 text-ink-secondary">Try local demo conversations and streaming replies.</Text>
         </View>
         <Switch value={useMock} onValueChange={(value) => { edit(); setUseMock(value); }}
           disabled={!settingsReady || saving} accessibilityLabel="Use mock channel"
@@ -101,9 +100,6 @@ export default function SettingsScreen() {
         editable={settingsReady && !saving} autoCapitalize="none" autoCorrect={false} autoComplete="off" secureTextEntry
         accessibilityLabel="Auth token" placeholder="Zakura Bot device token" placeholderTextColor="#a3a3a3"
         className="mb-5 min-h-11 rounded-xl border border-hairline bg-panel px-4 py-3 text-[15px] text-ink" />
-      <Text className="mb-6 text-[13px] leading-6 text-ink-secondary">
-        Manual fallback: create a device in Zakura’s agent platform page, then enter its token here. Browser login above refreshes credentials automatically.
-      </Text>
       {error ? <View className="mb-4 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3" accessibilityRole="alert" accessibilityLiveRegion="polite">
         <Text className="text-[13px] leading-5 text-danger">{error}</Text>
       </View> : null}
@@ -121,9 +117,6 @@ export default function SettingsScreen() {
           <Text className="text-[14px] text-ink-secondary">Close</Text>
         </Pressable>
       </View>
-      <Text className="mt-6 text-[12px] leading-5 text-ink-secondary">
-        {Platform.OS === "web" ? "Credentials stay in this tab’s session storage; closing the tab requires a new login." : "Credentials are protected by SecureStore on this device."} Live message history is restored from Zakura on reconnect.
-      </Text>
     </ScrollView>
   );
 }

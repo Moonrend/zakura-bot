@@ -1,5 +1,5 @@
 import { Pressable, Text, View } from "react-native";
-import { AlertCircle, RotateCcw } from "lucide-react-native";
+import { RotateCcw } from "lucide-react-native";
 import type { ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { formatTime } from "@/lib/store";
@@ -15,13 +15,12 @@ type Props = {
   retryDisabled?: boolean;
   grouped?: boolean;
   reducedMotion?: boolean;
-  onExpandDetails?: () => void;
 };
 
-export function MessageBubble({ message, replyTarget, onRetry, onFocusLost, retryDisabled, grouped, reducedMotion, onExpandDetails }: Props) {
+export function MessageBubble({ message, replyTarget, onRetry, onFocusLost, retryDisabled, grouped, reducedMotion }: Props) {
   const setRetryRef = useFocusOnRemoval(onFocusLost);
-  if (message.kind === "activity" && message.tool) return <ActivityChip tool={message.tool} reducedMotion={reducedMotion}
-    onExpand={onExpandDetails} onFocusLost={onFocusLost} />;
+  if (message.kind === "activity") return message.tool
+    ? <ActivityChip tool={message.tool} reducedMotion={reducedMotion} /> : null;
   if (message.kind === "system") return <View className="my-2 min-w-0 items-center"><Text testID="message-text"
     className="max-w-full text-[12px] text-ink-secondary" selectable>{message.text}</Text></View>;
   const user = message.role === "user";
@@ -38,9 +37,9 @@ export function MessageBubble({ message, replyTarget, onRetry, onFocusLost, retr
         )}>
           <ReplyContent message={message} replyTarget={replyTarget} onFocusLost={onFocusLost} />
         </View>
-        {!grouped || message.streaming || message.interrupted || message.pending ? (
+        {!message.streaming && (!grouped || message.interrupted || message.pending) ? (
           <Text className="mt-1.5 px-1 text-[11px] text-ink-secondary">
-            {message.streaming ? "Replying…" : message.interrupted ? "Stopped" : message.pending ? "Sending…" : `${user ? "You · " : ""}${formatTime(message.createdAt)}`}
+            {message.interrupted ? "Stopped" : message.pending ? "Sending…" : formatTime(message.createdAt)}
           </Text>
         ) : null}
         {message.failed ? (
@@ -48,9 +47,8 @@ export function MessageBubble({ message, replyTarget, onRetry, onFocusLost, retr
             accessibilityRole="button" accessibilityLabel="Retry failed message"
             accessibilityState={{ disabled: retryDisabled || !onRetry }}
             className="mt-1 min-h-11 flex-row items-center gap-1.5 rounded-lg px-2 py-2 active:bg-raised">
-            <AlertCircle size={14} color="#ff5667" />
-            <Text className="text-[12px] text-danger">Send failed · Retry</Text>
             <RotateCcw size={12} color="#ff5667" />
+            <Text className="text-[12px] text-danger">Retry</Text>
           </Pressable>
         ) : null}
       </View>

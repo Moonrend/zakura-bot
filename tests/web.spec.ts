@@ -66,26 +66,26 @@ test("dismissing a rendered error cannot dismiss a replacement or an error revea
   };
 
   channel!.send(JSON.stringify({ type: "error", agentId: "live", message: "Earlier operation failed" }));
-  await expect(details).toContainText("Earlier operation failed");
+  await expect(details).toContainText("Something went wrong");
   await staleDismiss({ type: "error", agentId: "live", message: "A different operation failed" });
-  await expect(details).toContainText("A different operation failed");
+  await expect(details).toContainText("Something went wrong");
   await expect(dismiss).toBeFocused();
   await expect(input).toHaveValue("Keep the next draft");
   await dismiss.press("Enter");
   await expect(details).toHaveCount(0);
 
   await input.press("Enter");
-  await expect(details).toContainText("Delivery has not been confirmed");
+  await expect(details).toContainText("Message not sent");
   // Keep an independent run failure underneath the delivery error.
   channel!.send(JSON.stringify({ type: "error", agentId: "live", turnEnded: true, message: "The run could not complete" }));
-  await expect(details).toContainText("The run could not complete");
+  await expect(details).toContainText("Couldn’t finish");
   channel!.send(JSON.stringify({ type: "error", agentId: "live", clientMessageId: pending!.clientMessageId,
     message: "Delivery has not been confirmed" }));
-  await expect(details).toContainText("Delivery has not been confirmed");
+  await expect(details).toContainText("Message not sent");
   await input.fill("Keep a separate draft");
   await staleDismiss({ type: "message", message: { id: pending!.clientMessageId, agentId: "live", role: "user", kind: "text",
     clientMessageId: pending!.clientMessageId, text: pending!.text, createdAt: 1 } });
-  await expect(details).toContainText("The run could not complete");
+  await expect(details).toContainText("Couldn’t finish");
   await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toHaveCount(0);
   await expect(input).toHaveValue("Keep a separate draft");
   await dismiss.press("Enter");
@@ -186,7 +186,7 @@ for (const width of [320, 1024]) test(`unsupported uploads keep their explanatio
   await expect(input).toHaveValue(draft);
   const details = page.getByRole("region", { name: "Channel status details", exact: true });
   await expect(details).toContainText(notice);
-  await expect(details).toContainText("Authentication failed");
+  await expect(details).toContainText("Connection failed");
   for (const control of [input, reconnect, page.getByRole("button", { name: "Edit connection settings", exact: true })]) {
     const box = (await control.boundingBox())!;
     expect(box.y).toBeGreaterThanOrEqual(0);
@@ -205,10 +205,10 @@ for (const width of [320, 1024]) test(`unsupported uploads keep their explanatio
   await expect(page.getByText(notice, { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
   channel!.send(JSON.stringify({ type: "error", agentId: "live", message: "Keep this separate channel error" }));
-  await expect(details).toContainText("Keep this separate channel error");
+  await expect(details).toContainText("Something went wrong");
   await page.getByRole("button", { name: "Dismiss attachment notice", exact: true }).press("Enter");
   await expect(page.getByText(notice, { exact: true })).toHaveCount(0);
-  await expect(details).toContainText("Keep this separate channel error");
+  await expect(details).toContainText("Something went wrong");
   await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBe(0);
   await expect(page.getByTestId("chat-transcript")).toBeFocused();
   await page.getByRole("button", { name: "Dismiss error", exact: true }).press("Enter");
@@ -248,12 +248,13 @@ test("new channel errors start at their explanation while unchanged details reta
   await expect(details).toBeFocused();
   const second = `New actionable error. ${"A different explanation. ".repeat(50)}`;
   channel!.send(JSON.stringify({ type: "error", agentId: "live", message: second }));
-  await expect(details).toContainText(second);
+  await expect(details).toHaveText("Something went wrong");
+  expect(await page.locator("body").innerHTML()).not.toContain(second);
   await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBe(0);
   await expect(details).toBeFocused();
   await input.focus();
   channel!.send(JSON.stringify({ type: "error", agentId: "live", message: "Another error" }));
-  await expect(details).toContainText("Another error");
+  await expect(details).toContainText("Something went wrong");
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep this draft");
 });
@@ -455,12 +456,12 @@ test("disabling focused conversation controls preserves navigation and the next 
   const input = page.getByRole("textbox", { name: "Message Live", exact: true });
   const transcript = page.getByTestId("chat-transcript");
   const send = page.getByRole("button", { name: "Send message", exact: true });
-  const suggestion = page.getByRole("button", { name: "Say hello", exact: true });
+  await expect(transcript.getByRole("button")).toHaveCount(0);
   await input.fill("Keep this draft while offline");
-  await suggestion.focus();
+  await send.focus();
   await context.setOffline(true);
-  await expect(suggestion).toBeDisabled();
-  await expect(transcript).toBeFocused();
+  await expect(send).toBeDisabled();
+  await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep this draft while offline");
   await context.setOffline(false);
   await expect(send).toBeEnabled();
@@ -497,7 +498,9 @@ test("disabling focused conversation controls preserves navigation and the next 
   await accessible(page);
 });
 
-test("tool updates that remove details preserve transcript navigation and leave focused drafts alone", async ({ page }) => {
+for (const width of [1440, 320]) test(`tools show one generic pill without exposing names or payloads (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
     channel = socket;
@@ -512,35 +515,50 @@ test("tool updates that remove details preserve transcript navigation and leave 
   await page.goto("/");
   const input = page.getByRole("textbox", { name: "Message Live", exact: true });
   const transcript = page.getByTestId("chat-transcript");
+  const pill = page.getByTestId("tool-activity");
   await input.fill("Keep the next draft");
-  const updateTool = (id: string, detail?: string, ok?: boolean) => channel!.send(JSON.stringify({
-    type: "tool_activity", agentId: "live", message: { id, agentId: "live", role: "assistant", kind: "activity",
-      createdAt: 1, tool: { name: "search", detail, ok } },
-  }));
-  for (const [index, detail] of [undefined, "", " \n\t "].entries()) {
-    const id = `tool-${index}`;
-    updateTool(id, "Read these details");
-    const row = page.getByTestId(`transcript-row-${id}`);
-    const chip = row.getByRole("button", { name: "Tool search, Running", exact: true });
-    await chip.press("Enter");
-    await expect(chip).toHaveAttribute("aria-expanded", "true");
-    await expect(row.getByText("Read these details", { exact: true })).toBeVisible();
-    updateTool(id, detail, true);
-    await expect(row.getByRole("button")).toHaveCount(0);
-    await expect(row.getByTestId("message-text")).toHaveCount(0);
-    await expect(transcript).toBeFocused();
-    await expect(input).toHaveValue("Keep the next draft");
+  const cases = [
+    ["private_web.search", "Searching…"], ["private_code_interpreter", "Running code…"],
+    ["private_shell", "Running code…"], ["private_exec_command", "Running code…"],
+    ["private_read_file", "Working…"],
+  ];
+  for (const [index, [name, label]] of cases.entries()) {
+    const message = { id: `tool-${index}`, agentId: "live", role: "assistant", kind: "activity", createdAt: index + 1,
+      text: "RAW_TOOL_PAYLOAD", tool: { name, detail: "PRIVATE_ARGS_AND_RESULT" } };
+    channel!.send(JSON.stringify({ type: "tool_activity", agentId: "live", message }));
+    await expect(pill).toHaveCount(1);
+    await expect(pill).toHaveText(label);
+    await expect(pill).toHaveAttribute("aria-label", label);
+    await expect(pill).not.toHaveAttribute("aria-expanded");
+    await expect(transcript.getByRole("button")).toHaveCount(0);
+    await expect(page.getByTestId(`transcript-row-${message.id}`)).toHaveCount(0);
+    const html = await page.locator("body").innerHTML();
+    for (const hidden of [name, "RAW_TOOL_PAYLOAD", "PRIVATE_ARGS_AND_RESULT"]) expect(html).not.toContain(hidden);
+    expect(await transcript.ariaSnapshot()).not.toContain(name);
+    await expect(input).toBeFocused();
+    const state = index % 3 === 0 ? { ok: true } : index % 3 === 1 ? { ok: false } : { interrupted: true };
+    channel!.send(JSON.stringify({ type: "tool_activity", agentId: "live", message: { ...message, tool: { ...message.tool, ...state } } }));
+    await expect(pill).toHaveCount(0);
+    await expect(transcript.locator('[data-testid^="transcript-row-"]')).toHaveCount(0);
   }
-
-  updateTool("background", "Keep useful indentation\n  in tool output");
-  const row = page.getByTestId("transcript-row-background");
-  await row.getByRole("button", { name: "Tool search, Running", exact: true }).click();
-  await expect(row.getByTestId("message-text")).toHaveText("Keep useful indentation\n  in tool output", { useInnerText: true });
-  await input.focus();
-  updateTool("background", undefined, true);
-  await expect(row.getByRole("button")).toHaveCount(0);
+  const tool = (id: string, name: string, ok?: boolean) => channel!.send(JSON.stringify({ type: "tool_activity", agentId: "live",
+    message: { id, agentId: "live", role: "assistant", kind: "activity", createdAt: id === "parallel-a" ? 10 : 11, tool: { name, ok } } }));
+  tool("parallel-a", "private_search");
+  tool("parallel-b", "private_shell");
+  await expect(pill).toHaveCount(1);
+  await expect(pill).toHaveText("Running code…");
+  tool("parallel-b", "private_shell", true);
+  await expect(pill).toHaveCount(1);
+  await expect(pill).toHaveText("Searching…");
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "answer", createdAt: 12,
+    payload: { text: "Here is the final answer." } }));
+  channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: false }));
+  await expect(pill).toHaveCount(0);
+  await expect(transcript.locator('[data-testid^="transcript-row-"]')).toHaveCount(1);
+  await expect(page.getByTestId("message-answer")).toContainText("Here is the final answer.");
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep the next draft");
+  await noOverflow(page);
   await accessible(page);
 });
 
@@ -1025,18 +1043,18 @@ test("blank reply bodies do not bury attachments or hide completed reply announc
   await expect(stream.getByTestId("message-text")).toContainText("▍");
   await expect.poll(() => stream.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(140);
   channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "empty-stream", interrupted: true }));
-  await expect(stream).toContainText("Reply stopped before any text arrived.");
-  await expect(page.getByText("Live stopped: Reply stopped before any text arrived.", { exact: true })).toHaveCount(1);
+  await expect(stream).toContainText("Stopped");
+  await expect(page.getByText("Live stopped: Stopped", { exact: true })).toHaveCount(1);
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep the next draft");
   await noOverflow(page);
   await accessible(page);
 });
 
-for (const width of [1440, 320]) test(`expanding long tool details keeps their beginning visible while replies arrive (${width}px)`, async ({ page }) => {
+for (const width of [1440, 320]) test(`hidden tool history does not add rows, pages or move the reading position (${width}px)`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 });
   let channel: WebSocketRoute | undefined;
-  const detail = Array.from({ length: 60 }, (_, index) => `Report line ${index + 1}: tool output`).join("\n");
+  const detail = "PRIVATE_REPORT_OUTPUT ".repeat(500);
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
     channel = socket;
     socket.onMessage((raw) => {
@@ -1044,49 +1062,34 @@ for (const width of [1440, 320]) test(`expanding long tool details keeps their b
       socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
       for (let index = 0; index < 16; index++) socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `history-${index}`,
         createdAt: index, payload: { text: `History ${index}. ${"Previous content. ".repeat(12)}` } }));
-      socket.send(JSON.stringify({ type: "tool_activity", agentId: "live", message: { id: "report", agentId: "live",
-        role: "assistant", kind: "activity", createdAt: 20, tool: { name: "report", ok: true, detail } } }));
     });
   });
   await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
   await page.goto("/");
   const transcript = page.getByTestId("chat-transcript");
   const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await expect(page.getByTestId("message-history-15")).toBeVisible();
+  await transcript.press("Home");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
   await input.fill("Keep the next draft");
-  const chip = page.getByRole("button", { name: "Tool report, Done", exact: true });
-  await expect(chip).toBeInViewport();
-  await chip.focus();
-  const before = await transcript.evaluate((element) => ({ top: element.scrollTop, height: element.scrollHeight }));
-  await chip.press("Enter");
-  await expect(chip).toHaveAttribute("aria-expanded", "true");
-  await expect.poll(() => transcript.evaluate((element) => element.scrollHeight)).toBeGreaterThan(before.height + 500);
-  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(before.top);
-  await expect(chip).toBeFocused();
-  await expect(chip).toBeInViewport();
-  const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
-  await expect(jump).toBeVisible();
-  await input.focus();
-  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "after-details", createdAt: 30, payload: { text: "New reply below the report" } }));
-  await expect(page.getByTestId("message-after-details")).toHaveCount(1);
-  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(before.top);
+  for (let index = 0; index < 75; index++) channel!.send(JSON.stringify({ type: "tool_activity", agentId: "live",
+    message: { id: `private-report-${index}`, agentId: "live", role: "assistant", kind: "activity", createdAt: (index + 1) * 86400000,
+      tool: { name: "private_report", detail, ...(index % 3 === 0 ? { ok: true } : index % 3 === 1 ? { ok: false } : { interrupted: true }) } } }));
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "after-tools", createdAt: 30,
+    payload: { text: "New reply after tools" } }));
+  await expect(page.getByTestId("message-after-tools")).toHaveCount(1);
+  await expect(transcript.locator('[data-testid^="transcript-row-"]')).toHaveCount(17);
+  await expect(page.getByRole("button", { name: "Load earlier messages", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("tool-activity")).toHaveCount(0);
+  expect(await page.locator("body").innerHTML()).not.toContain("PRIVATE_REPORT_OUTPUT");
+  expect(await transcript.ariaSnapshot()).not.toContain("private_report");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep the next draft");
+  const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
   await jump.click();
   await expect(jump).toHaveCount(0);
-  await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(80);
-  channel!.send(JSON.stringify({ type: "tool_activity", agentId: "live", message: { id: "short-report", agentId: "live",
-    role: "assistant", kind: "activity", createdAt: 40, tool: { name: "summary", ok: true, detail: "A short summary" } } }));
-  const summary = page.getByRole("button", { name: "Tool summary, Done", exact: true });
-  await expect(summary).toBeInViewport();
-  await summary.press("Enter");
-  await expect(page.getByText("A short summary", { exact: true })).toBeInViewport();
-  await expect(jump).toHaveCount(0);
-  await summary.press("Enter");
-  await expect(summary).toHaveAttribute("aria-expanded", "false");
-  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "after-summary", createdAt: 50, payload: { text: "Still following new replies" } }));
-  await expect(page.getByTestId("message-after-summary")).toBeInViewport();
-  await expect(jump).toHaveCount(0);
-  await expect(input).toHaveValue("Keep the next draft");
+  await expect(page.getByTestId("message-after-tools")).toBeInViewport();
   await noOverflow(page);
   await accessible(page);
 });
@@ -1292,7 +1295,7 @@ test("invalid reply payloads stay in their conversation and revoked backfill can
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(input).toBeFocused();
   await agent(page, "Alpha").click();
-  await expect(page.getByRole("alert")).toContainText("Invalid channel frame");
+  await expect(page.getByRole("alert")).toContainText("Something went wrong");
   await agent(page, "Beta").click();
   channel!.send(JSON.stringify({ type: "agents", agents: [roster[1]] }));
   channel!.send(JSON.stringify(invalidReply));
@@ -1395,13 +1398,13 @@ test("late receipts clear delivery failures without hiding a separate run error 
   channel!.send(JSON.stringify({ type: "message", message: { id: "current", agentId: "live", role: "user", kind: "text",
     text: "A newer turn", createdAt: Date.now() + 1000 } }));
   channel!.send(JSON.stringify({ type: "error", agentId: "live", clientMessageId: "current", turnEnded: true, message: "Current run failed" }));
-  await expect(page.getByRole("alert")).toContainText("Current run failed");
+  await expect(page.getByRole("alert")).toContainText("Couldn’t finish");
   channel!.send(JSON.stringify({ type: "error", agentId: "live", clientMessageId: sent!.clientMessageId, message: "Earlier delivery failed" }));
-  await expect(page.getByRole("alert")).toContainText("Earlier delivery failed");
+  await expect(page.getByRole("alert")).toContainText("Message not sent");
   channel!.send(JSON.stringify({ type: "message", message: { id: "server-old", clientMessageId: sent!.clientMessageId,
     agentId: "live", role: "user", kind: "text", text: sent!.text, createdAt: 1 } }));
   await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("alert")).toContainText("Current run failed");
+  await expect(page.getByRole("alert")).toContainText("Couldn’t finish");
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep the next draft");
   await page.getByRole("button", { name: "Dismiss error", exact: true }).press("Enter");
@@ -1524,7 +1527,7 @@ test("reply actions and file links make their entire padded area keyboard and to
   await accessible(page);
 });
 
-test("empty-thread suggestions and disappearing error controls preserve keyboard focus and drafts", async ({ page }) => {
+test("quiet empty threads and disappearing error controls preserve keyboard focus and drafts", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   let sent: { clientMessageId: string; text: string } | undefined;
   let connections = 0;
@@ -1544,16 +1547,19 @@ test("empty-thread suggestions and disappearing error controls preserve keyboard
   const input = page.getByRole("textbox", { name: "Message Live", exact: true });
   const transcript = page.getByTestId("chat-transcript");
   await input.fill("Keep this draft");
-  await page.getByRole("button", { name: "Say hello", exact: true }).focus();
+  await expect(transcript.getByRole("button")).toHaveCount(0);
+  await expect(transcript).not.toContainText("A new conversation starts");
   channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "offline" }] }));
-  await expect(page.getByRole("button", { name: "Say hello", exact: true })).toHaveCount(0);
-  await expect(transcript).toBeFocused();
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
+  await expect(input).toBeFocused();
   await expect(input).toHaveValue("Keep this draft");
   channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "idle" }] }));
-  await page.getByRole("button", { name: "Say hello", exact: true }).press("Enter");
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  await input.fill("Say hello");
+  await input.press("Enter");
   await expect.poll(() => sent?.text).toBe("Say hello");
-  await expect(transcript).toBeFocused();
-  await expect(input).toHaveValue("Keep this draft");
+  await expect(input).toBeFocused();
+  await input.fill("Keep this draft");
   const reject = () => channel!.send(JSON.stringify({ type: "error", agentId: "live", clientMessageId: sent!.clientMessageId, message: "Delivery needs a retry" }));
   reject();
   await page.getByRole("button", { name: "Dismiss error", exact: true }).press("Enter");
@@ -1639,14 +1645,14 @@ test("delivered turn failures preserve receipts and drafts without stopping a ne
   const failure = (index: number) => channel!.send(JSON.stringify({ type: "error", agentId: "live",
     clientMessageId: sends[index].clientMessageId, turnEnded: true, message: `Run ${index} failed after delivery` }));
   failure(0);
-  await expect(page.getByRole("alert")).toContainText("Run 0 failed after delivery");
+  await expect(page.getByRole("alert")).toContainText("Couldn’t finish");
   await expect(page.getByTestId("message-reply-0")).toContainText("Stopped");
   await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
   await expect(input).toHaveValue("Next draft");
   await expect(input).toBeFocused();
   channel!.send(JSON.stringify(receipt(0)));
-  await expect(page.getByRole("alert")).toContainText("Run 0 failed after delivery");
+  await expect(page.getByRole("alert")).toContainText("Couldn’t finish");
   await input.press("Enter");
   await expect(page.getByTestId("message-reply-1")).toContainText("Reply 1");
   await input.fill("Keep this next draft");
@@ -1658,7 +1664,7 @@ test("delivered turn failures preserve receipts and drafts without stopping a ne
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(stopping).toBeVisible();
   failure(1);
-  await expect(page.getByRole("alert")).toContainText("Run 1 failed after delivery");
+  await expect(page.getByRole("alert")).toContainText("Couldn’t finish");
   await expect(stopping).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toHaveCount(0);
   await expect(input).toHaveValue("Keep this next draft");
@@ -1692,14 +1698,14 @@ test("reconnect keeps settled stream text and tool chips while an idle roster co
   const input = page.getByRole("textbox", { name: "Message Live", exact: true });
   const reply = page.getByTestId("message-stream");
   await expect(reply).toContainText("Keep the received text");
-  await expect(page.getByRole("button", { name: "Tool search, Done", exact: true })).toBeVisible();
+  await expect(page.getByTestId("tool-activity")).toHaveCount(0);
   await input.fill("Keep this next draft");
   channel!.close({ code: 1011, reason: "test reconnect during a reply" });
   await expect.poll(() => connections).toBe(2);
   await expect(reply).toContainText("Keep the received text");
   await expect(reply).toContainText("Stopped");
   await expect(reply).not.toContainText("Stale replay");
-  await expect(page.getByRole("button", { name: "Tool search, Done", exact: true })).toBeVisible();
+  await expect(page.getByTestId("tool-activity")).toHaveCount(0);
   await page.getByRole("button", { name: "Stop generating", exact: true }).press("Enter");
   await expect.poll(() => interrupts).toBe(1);
   await expect(page.getByRole("button", { name: "Stopping reply", exact: true })).toBeDisabled();
@@ -1805,7 +1811,7 @@ test("conflicting output receipt ids keep delivery pending until a valid echo ar
   const input = page.getByRole("textbox", { name: "Message Live", exact: true });
   await input.fill("A new message");
   await input.press("Enter");
-  await expect(page.getByRole("alert")).toContainText("conflicting ids");
+  await expect(page.getByRole("alert")).toContainText("Something went wrong");
   await expect(page.getByRole("button", { name: "Send message", exact: true })).toHaveAttribute("aria-busy", "true");
   await expect(page.getByTestId("message-occupied")).toContainText("Keep the existing reply");
   await input.fill("Keep this next draft");
@@ -1919,10 +1925,9 @@ test("IME Enter, multiline drafts, streaming, tool details and Stop", async ({ p
   await input.press("Enter");
   await input.press("Enter");
   await expect(page.getByTestId("chat-transcript").locator('[data-testid^="message-user_"]')).toHaveCount(1);
-  await expect(page.getByText("Replying…", { exact: true })).toBeVisible();
-  const tool = page.getByRole("button", { name: /^Tool chat_reply, Running/ });
-  await tool.click();
-  await expect(tool).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("button", { name: "Stop generating", exact: true })).toBeVisible();
+  await expect(page.getByTestId("tool-activity")).toHaveText("Working…");
+  await expect(page.getByRole("button", { name: /^Tool / })).toHaveCount(0);
   await input.fill("My next draft");
   await page.getByRole("button", { name: "Stop generating", exact: true }).click();
   await expect(page.getByText("Replying…", { exact: true })).toHaveCount(0);
@@ -1936,9 +1941,9 @@ test("tool failure can be dismissed and a conversation can recover", async ({ pa
   const input = page.getByRole("textbox", { name: "Message Zakura", exact: true });
   await input.fill("fail");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Demo reply failed");
-  await page.getByRole("button", { name: /^Tool chat_reply, Failed/ }).click();
-  await expect(page.getByText("Reply could not be delivered (demo)", { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("Couldn’t finish");
+  await expect(page.getByTestId("tool-activity")).toHaveCount(0);
+  await expect(page.getByText("Reply could not be delivered (demo)", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Dismiss error", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
   await input.fill("hello");
@@ -2124,7 +2129,7 @@ test("live roster, rejected send retry, chat_reply cards and raw model event iso
   await expect(agent(page, "Zakura")).toHaveCount(0);
   await page.getByRole("textbox", { name: "Message Live agent", exact: true }).fill("Test delivery");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Server rejected this message");
+  await expect(page.getByRole("alert")).toContainText("Message not sent");
   await page.getByRole("button", { name: "Retry failed message", exact: true }).click();
   await expect(page.getByText("Visible channel reply", { exact: true })).toBeVisible();
   await expect(page.getByTestId("message-reply")).toContainText("Reply to you");
@@ -2218,7 +2223,7 @@ test("composer shrinks after deletion and sending; Escape preserves drafts and r
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(input).toHaveValue("");
   await expect.poll(() => input.evaluate((element) => element.clientHeight)).toBe(44);
-  await expect(page.getByText("Replying…", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop generating", exact: true })).toBeVisible();
   await expect(input).toBeFocused();
 });
 
@@ -2390,7 +2395,7 @@ test("live roster refresh, stream replay, interrupt denial and offline recovery 
   await expect(page.getByRole("button", { name: "Stopping reply", exact: true })).toBeDisabled();
   // The current v1 server's interrupt refusal does not include turnEnded.
   channel!.send(JSON.stringify({ type: "error", agentId: "live", message: "Cannot interrupt this task" }));
-  await expect(page.getByRole("alert")).toContainText("Cannot interrupt this task");
+  await expect(page.getByRole("alert")).toContainText("Something went wrong");
   channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "stream", delta: " continue" }));
   await expect(reply).toContainText("First words continue");
   await expect(page.getByRole("button", { name: "Stop generating", exact: true })).toBeEnabled();
@@ -2429,7 +2434,7 @@ test("long headerless cards and an empty interrupted reply remain usable on narr
   });
   await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
   await page.goto("/");
-  await expect(page.getByText("Reply stopped before any text arrived.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Stopped", { exact: true }).first()).toBeVisible();
   await noOverflow(page);
   const transcript = page.getByTestId("chat-transcript");
   expect(await transcript.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -2546,7 +2551,7 @@ test("unsupported file drops and image paste keep the page and draft intact", as
   await accessible(page);
 });
 
-test("long channel errors keep the composer and keyboard-scrollable details reachable in short windows", async ({ page }) => {
+test("long channel errors stay concise and keep the composer reachable in short windows", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
     channel = socket;
@@ -2569,7 +2574,9 @@ test("long channel errors keep the composer and keyboard-scrollable details reac
     await expect.poll(() => transcript.evaluate((element) => element.clientHeight)).toBeGreaterThan(0);
     await details.focus();
     await details.press("End");
-    await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(details).toHaveText("Something went wrong");
+    expect(await details.evaluate((element) => element.scrollTop)).toBe(0);
+    await expect(page.getByText(/Server detail:/)).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeInViewport();
   }
   await accessible(page);
@@ -2595,7 +2602,7 @@ test("a late stop refusal leaves the next live reply and its draft running", asy
   channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "next", createdAt: 1, streaming: true, payload: { text: "New reply" } }));
   channel!.send(JSON.stringify({ type: "error", agentId: "live", message: "Earlier Stop was refused" }));
   channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "next", delta: " continues" }));
-  await expect(page.getByRole("alert")).toContainText("Earlier Stop was refused");
+  await expect(page.getByRole("alert")).toContainText("Something went wrong");
   await expect(page.getByTestId("message-next")).toContainText("New reply continues");
   await expect(page.getByRole("button", { name: "Stop generating", exact: true })).toBeEnabled();
   await expect(input).toHaveValue("Keep my next draft");
@@ -2634,7 +2641,7 @@ test("unsupported file drops are blocked on direct settings loads and empty rost
   for (const path of ["/settings", "/"]) {
     await page.goto(path);
     if (path === "/settings") await page.getByLabel("Zakura Base URL", { exact: true }).fill("https://unsaved.example.com");
-    else await expect(page.getByText("No agents available", { exact: true })).toBeVisible();
+    else await expect(page.getByText("No bots yet", { exact: true })).toBeVisible();
     const prevented = await page.locator("body").evaluate((element) => {
       const dataTransfer = new DataTransfer();
       dataTransfer.items.add(new File(["draft"], "draft.txt", { type: "text/plain" }));
@@ -2673,7 +2680,7 @@ test("browser offline pauses delivery immediately and reconnect history restores
   await expect.poll(() => sends.length).toBe(1);
   await input.fill("Keep my next draft");
   await context.setOffline(true);
-  await expect(page.getByRole("alert")).toContainText("Network offline");
+  await expect(page.getByRole("alert")).toContainText("Disconnected");
   await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toBeDisabled();
   await input.press("Enter");
@@ -2702,7 +2709,7 @@ test("empty channel recovery remains keyboard accessible in a short narrow windo
   await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
   await page.goto("/");
   const settings = page.getByRole("button", { name: "Open connection settings", exact: true });
-  await expect(page.getByText("No agents available", { exact: true })).toBeVisible();
+  await expect(page.getByText("No bots yet", { exact: true })).toBeVisible();
   // The same heading is briefly rendered before hydration opens the socket.
   await expect(page.getByText("Your channel has no agents yet. Check the agents assigned to your account.", { exact: true })).toBeVisible();
   await expect(settings).toBeVisible();
@@ -2898,7 +2905,7 @@ test("manual reconnect keeps receipt identities and recovers a pending send afte
   expect(connections).toBe(2);
   expect(sends).toHaveLength(2);
   channel!.send(JSON.stringify({ ...receipt(0), message: { ...receipt(0).message, clientMessageId: sends[1].clientMessageId } }));
-  await expect(page.getByRole("alert")).toContainText("conflicting ids");
+  await expect(page.getByRole("alert")).toContainText("Something went wrong");
   await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toBeVisible();
   channel!.send(JSON.stringify(receipt(1)));
   await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toHaveCount(0);

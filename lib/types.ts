@@ -43,6 +43,30 @@ export interface MessageCard {
   links?: MessageLink[];
 }
 
+/** Additive chat_reply metadata; the card remains usable by older clients. */
+export interface MessageInteraction {
+  type: "approval" | "question" | "form";
+  requestId: string;
+  status: "pending" | "answered" | "cancelled" | "skipped" | "timeout" | "resolved";
+  title: string;
+  options?: { id: string; label: string; description?: string; kind?: string }[];
+  allowMultiple?: boolean;
+  secret?: boolean;
+  mode?: "sync" | "async" | "form" | "url";
+  expiresAt?: string | null;
+  placeholder?: string;
+  url?: string;
+  fields?: { id: string; type: string; title?: string; required?: boolean; options?: string[] }[];
+}
+
+export interface InteractionAnswer {
+  cancelled?: boolean;
+  optionId?: string;
+  selected?: string[];
+  text?: string;
+  content?: Record<string, string | number | boolean | string[]>;
+}
+
 export interface ChatMessage {
   id: string;
   agentId: string;
@@ -54,6 +78,7 @@ export interface ChatMessage {
   attachments?: MessageAttachment[];
   actions?: MessageLink[];
   card?: MessageCard;
+  interaction?: MessageInteraction;
   tool?: ToolActivity;
   createdAt: number;
   /** User echo correlation, even if the server assigns a different id. */

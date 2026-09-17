@@ -40,7 +40,7 @@ export type ChatAction = ChannelEvent
   | { type: "dismiss_error"; error: ChannelError };
 
 function visibleContent(message: ChatMessage): boolean {
-  return message.kind === "text" && !!(message.text?.trim() || message.card || message.attachments?.length || message.actions?.length);
+  return message.kind === "text" && !!(message.text?.trim() || message.card || message.interaction || message.attachments?.length || message.actions?.length);
 }
 
 function activeOutput(message: ChatMessage): boolean {
@@ -83,6 +83,9 @@ function putMessage(state: ChatState, incoming: ChatMessage): ChatState {
   const previous = byClientId ?? byServerId;
   // Message ids identify one role and content kind for the lifetime of a thread.
   if (previous && (previous.role !== incoming.role || previous.kind !== incoming.kind)) return state;
+  if (previous?.interaction && incoming.interaction &&
+    (previous.interaction.requestId !== incoming.interaction.requestId || previous.interaction.type !== incoming.interaction.type ||
+      (previous.interaction.status !== "pending" && incoming.interaction.status === "pending"))) return state;
   // Keep receipt identity as well as text immutable across client replacement.
   // A replay without correlation may use the known server id as its client id;
   // accept that fallback without replacing the original optimistic alias.
@@ -103,7 +106,7 @@ function putMessage(state: ChatState, incoming: ChatMessage): ChatState {
     serverId: incoming.id !== stableId ? incoming.id : previous?.serverId };
   const updated = (previous ? list.map((item) => item.id === stableId ? message : item) : [...list, message])
     .sort((a, b) => a.createdAt - b.createdAt);
-  const changed = !previous || ["text", "card", "attachments", "actions"].some(
+  const changed = !previous || ["text", "card", "interaction", "attachments", "actions"].some(
     (field) => JSON.stringify(previous[field as keyof ChatMessage]) !== JSON.stringify(message[field as keyof ChatMessage]),
   );
   const viewing = state.viewingThread && state.selectedId === message.agentId;

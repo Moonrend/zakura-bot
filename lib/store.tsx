@@ -10,12 +10,13 @@ import { chatReducer, emptyChatState, isAgentWorking, previewFromMessages, type 
 import { loadSettings, saveSettings, loadProfiles, saveProfile, readCredentials, writeCredentials, removeProfile } from "./settings";
 import { CredentialSession, credentialsFromToken, instanceUrl, refreshAuthorization, revokeAuthorization, zakuraRequest, zakuraBinaryRequest,
   type InstanceProfile, type TokenResponse, type ZakuraBinary } from "./auth";
-import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type BotSession, type MessageAttachment } from "./types";
+import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type BotSession, type InteractionAnswer, type MessageAttachment } from "./types";
 import { emptyGroups, reduceGroups, type BotGroups, type GroupAction } from "./groups";
 import { loadGroups, saveGroups } from "./group-storage";
 import { botFilePath, fileMessageText, parseUploadedFile, validatePickedFiles, type DraftAttachment, type PickedFile } from "./files";
 import { useAttachmentDrafts } from "./use-attachment-drafts";
 import { attachmentReferences } from "./channel/protocol";
+import { fetchInteraction, submitInteraction } from "./interactions";
 
 export type { ChannelError } from "./chat-state";
 
@@ -55,6 +56,8 @@ type StoreValue = {
   clearDraft: (agentId: string, submitted: string) => void;
   send: (text: string, agentId?: string, attachments?: MessageAttachment[]) => Promise<boolean>;
   retryMessage: (messageId: string) => Promise<boolean>;
+  respondInteraction: (agentId: string, messageId: string, answer: InteractionAnswer) => Promise<void>;
+  refreshInteraction: (agentId: string, messageId: string) => Promise<void>;
   interrupt: () => Promise<void>;
   reconnect: () => Promise<void>;
   dismissError: () => void;
@@ -112,6 +115,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [transportLabel, setTransportLabel] = useState("Mock");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const clientRef = useRef<ZakuraChannelClient | null>(null);
+  const interactionSubmissions = useRef(new Map<string, Promise<void>>());
   const disposeRef = useRef<(() => void) | null>(null);
   const scopeRef = useRef<string | null>(null);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
@@ -294,6 +298,29 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [request]);
   const { attachmentsByAgent, addAttachments, clearAttachments, retryAttachment } = useAttachmentDrafts(settingsScope, uploadFile);
 
+  const applyInteraction = useCallback((message: ChatMessage, client: ZakuraChannelClient | null) => {
+    if (client !== clientRef.current) throw new Error("The active connection changed.");
+    if (!stateRef.current.agents.some((agent) => agent.id === message.agentId)) throw new Error("This bot is no longer authorized.");
+    dispatch({ type: "message", message });
+  }, [dispatch]);
+  const refreshInteraction = useCallback(async (agentId: string, messageId: string) => {
+    const client = clientRef.current;
+    applyInteraction(await fetchInteraction(request, agentId, messageId), client);
+  }, [request, applyInteraction]);
+  const respondInteraction = useCallback((agentId: string, messageId: string, answer: InteractionAnswer): Promise<void> => {
+    const client = clientRef.current;
+    const key = JSON.stringify([channelScope(settingsRef.current), agentId, messageId]);
+    const pending = interactionSubmissions.current.get(key);
+    if (pending) return pending;
+    const message = stateRef.current.messagesByAgent[agentId]?.find((item) => item.id === messageId);
+    if (!message?.interaction) return Promise.reject(new Error("This request is no longer available."));
+    if (stateRef.current.connection !== "connected") return Promise.reject(new Error("Reconnect before responding to this request."));
+    const submission = submitInteraction(request, message, answer).then((updated) => applyInteraction(updated, client))
+      .finally(() => { if (interactionSubmissions.current.get(key) === submission) interactionSubmissions.current.delete(key); });
+    interactionSubmissions.current.set(key, submission);
+    return submission;
+  }, [request, applyInteraction]);
+
   const deliver = useCallback(async (agentId: string, text: string, messageId: string, attachments?: MessageAttachment[]): Promise<boolean> => {
     const current = stateRef.current;
     const client = clientRef.current;
@@ -459,10 +486,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
     profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
     requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment,
-    sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, interrupt, reconnect,
+    sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, respondInteraction, refreshInteraction, interrupt, reconnect,
     dismissError, updateSettings, setSidebarOpen, setThreadVisible,
   }), [state, settings, settingsReady, transportLabel, lastError, sidebarOpen, selectAgent, setDraft,
-    clearDraft, send, retryMessage, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
+    clearDraft, send, retryMessage, respondInteraction, refreshInteraction, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
     profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
     requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment]);
 

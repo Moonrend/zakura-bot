@@ -1,5 +1,5 @@
 /** Zakurabot v1 wire contract plus optional streaming/turn-ended extensions. */
-import type { Agent, ChatMessage, MessageAttachment, MessageCard, MessageLink } from "../types";
+import type { Agent, ChatMessage, MessageAttachment, MessageCard, MessageInteraction, MessageLink } from "../types";
 import { MAX_MESSAGE_LENGTH, type ChannelEvent } from "./types";
 
 export const PROTOCOL_VERSION = 1;
@@ -180,6 +180,48 @@ function card(value: unknown): MessageCard | undefined {
     ? result : undefined;
 }
 
+export function decodeInteraction(value: unknown): MessageInteraction {
+  requireValid(record(value) && oneOf(value.type, ["approval", "question", "form"]) && id(value.requestId));
+  requireValid(oneOf(value.status, ["pending", "answered", "cancelled", "skipped", "timeout", "resolved"]));
+  const shortString = (item: unknown, max: number) => typeof item === "string" && item.length <= max;
+  requireValid(shortString(value.title, 8000) && optionalBool(value.allowMultiple) && optionalBool(value.secret));
+  requireValid(value.mode === undefined || oneOf(value.mode, ["sync", "async", "form", "url"]));
+  requireValid(value.placeholder === undefined || shortString(value.placeholder, 2000));
+  requireValid(value.expiresAt === undefined || value.expiresAt === null ||
+    (typeof value.expiresAt === "string" && /^\d{4}-\d\d-\d\dT.*Z$/.test(value.expiresAt) && Number.isFinite(Date.parse(value.expiresAt))));
+  const result: MessageInteraction = {
+    type: value.type, requestId: value.requestId, status: value.status, title: value.title as string,
+    allowMultiple: value.allowMultiple, secret: value.secret, mode: value.mode as MessageInteraction["mode"],
+    expiresAt: value.expiresAt as MessageInteraction["expiresAt"], placeholder: value.placeholder as string | undefined,
+    url: value.url === undefined ? undefined : httpUrl(value.url),
+  };
+  if (value.options !== undefined) {
+    requireValid(Array.isArray(value.options) && value.options.length <= 32);
+    const seen = new Set<string>();
+    result.options = value.options.map((option) => {
+      requireValid(record(option) && id(option.id) && !seen.has(option.id) && shortString(option.label, 2000) && option.label);
+      requireValid(option.description === undefined || shortString(option.description, 4000));
+      requireValid(option.kind === undefined || shortString(option.kind, 128));
+      seen.add(option.id);
+      return { id: option.id, label: option.label as string, description: option.description as string | undefined, kind: option.kind as string | undefined };
+    });
+  }
+  if (value.fields !== undefined) {
+    requireValid(Array.isArray(value.fields) && value.fields.length <= 32);
+    const seen = new Set<string>();
+    result.fields = value.fields.map((field) => {
+      requireValid(record(field) && id(field.id) && !seen.has(field.id) && shortString(field.type, 128) && optionalBool(field.required));
+      requireValid(field.title === undefined || shortString(field.title, 2000));
+      requireValid(field.options === undefined || (Array.isArray(field.options) && field.options.length <= 32 &&
+        field.options.every((option) => shortString(option, 2000) && option)));
+      seen.add(field.id);
+      return { id: field.id, type: field.type as string, title: field.title as string | undefined,
+        required: field.required, options: field.options as string[] | undefined };
+    });
+  }
+  return result;
+}
+
 function roster(value: unknown): Agent[] {
   requireValid(Array.isArray(value));
   const seen = new Set<string>();
@@ -260,9 +302,10 @@ function decodeFrame(frame: RecordValue): ServerFrame | null {
         replyTo: payload.reply_to as string | undefined, streaming: frame.streaming ?? false,
         interrupted: frame.interrupted ?? false,
         attachments: attachments(payload.attachments), actions: links(payload.actions), card: card(payload.card),
+        ...(payload.interaction === undefined ? {} : { interaction: decodeInteraction(payload.interaction) }),
       };
       requireValid(payload.kind !== "card" || payload.card !== undefined);
-      requireValid(message.text?.trim() || message.streaming || message.interrupted || message.attachments?.length || message.actions?.length || message.card);
+      requireValid(message.text?.trim() || message.streaming || message.interrupted || message.attachments?.length || message.actions?.length || message.card || message.interaction);
       return { type: "chat_reply", message };
     }
     case "message": {

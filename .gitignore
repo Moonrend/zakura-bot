@@ -35,3 +35,4 @@ playwright-report/
 .idea/
 .vscode/
 *.swp
+docs/ux-grokbot-reference/

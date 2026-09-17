@@ -13,14 +13,12 @@ export function StatusBanner({ onFocusLost, notice }: {
   onFocusLost: () => void;
   notice?: { message: string; onDismiss: () => void };
 }) {
-  const { connection, connectionDetail, lastError, reconnect, dismissError, settings, selectedId } =
+  const { connection, lastError, reconnect, dismissError, settings, selectedId } =
     useStore();
   const router = useRouter();
-  const { height } = useWindowDimensions();
-  const shortWindow = height < 400;
 
   const error = lastError && (!lastError.agentId || lastError.agentId === selectedId) ? lastError : null;
-  const contentKey = JSON.stringify([connection, connection === "connected" ? error : connectionDetail, notice?.message]);
+  const contentKey = JSON.stringify([connection, error?.agentId, error?.clientMessageId, error?.turnEnded, notice?.message]);
   // A short viewport has room for one status area. Keep the upload explanation
   // and connection recovery together instead of growing the composer footer.
   const noticeText = notice ? <Text className="text-[13px] leading-5 text-ink">{notice.message}</Text> : null;
@@ -31,9 +29,7 @@ export function StatusBanner({ onFocusLost, notice }: {
     return (
       <Banner key="connecting" tone="muted" contentKey={contentKey} onFocusLost={onFocusLost} icon={<ActivityIndicator size="small" color="#fcfcfc99" />}>
         {noticeText}
-        <Text className="text-[13px] text-ink-secondary">
-          Connecting to Zakura{connectionDetail ? ` · ${connectionDetail}` : "…"}
-        </Text>
+        <Text className="text-[13px] text-ink-secondary">Connecting…</Text>
       </Banner>
     );
   }
@@ -48,33 +44,24 @@ export function StatusBanner({ onFocusLost, notice }: {
         onFocusLost={onFocusLost}
         icon={<WifiOff size={14} color="#ff5667" />}
         action={
-          <View className={cn("gap-1", shortWindow ? "flex-row" : "items-end")}><Pressable
+          <View className="flex-row gap-1"><Pressable
             onPress={() => void reconnect()}
             accessibilityRole="button"
             accessibilityLabel="Reconnect"
-            className={cn("min-h-11 flex-row items-center rounded-xl bg-raised active:bg-raised-hover",
-              shortWindow ? "w-11 justify-center" : "gap-1 px-3 py-2")}
+            className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
           >
-            <RefreshCw size={shortWindow ? 16 : 12} color="#fcfcfc" />
-            {!shortWindow ? <Text className="text-[12px] text-ink">Reconnect</Text> : null}
+            <RefreshCw size={16} color="#fcfcfc" />
           </Pressable>
           {live ? <Pressable onPress={() => router.push("/settings")} accessibilityRole="button" accessibilityLabel="Edit connection settings"
-            className={cn("min-h-11 justify-center rounded-xl active:bg-raised",
-              shortWindow ? "w-11 items-center" : "px-3 py-2")}>
-            {shortWindow ? <Settings size={16} color="#fcfcfc" /> : <Text className="text-[12px] text-ink">Settings</Text>}
+            className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised">
+            <Settings size={16} color="#fcfcfc" />
           </Pressable> : null}</View>
         }
       >
         {noticeText}
         <Text className="text-[13px] leading-5 text-ink">
-          {connection === "error" ? "Channel error" : "Disconnected"}
-          {connectionDetail ? ` · ${connectionDetail}` : ""}
+          {connection === "error" ? "Connection failed" : "Disconnected"}
         </Text>
-        {live ? (
-          <Text className="mt-1 text-[12px] leading-5 text-ink-secondary">
-            Check your connection settings or use the mock channel to try the demo.
-          </Text>
-        ) : null}
       </Banner>
     );
   }
@@ -100,7 +87,7 @@ export function StatusBanner({ onFocusLost, notice }: {
     >
       {noticeText}
       {error ? <Text className="text-[13px] leading-5 text-ink">
-        {error.message}
+        {error.turnEnded ? "Couldn’t finish" : error.clientMessageId ? "Message not sent" : "Something went wrong"}
       </Text> : null}
     </Banner>
   );
@@ -136,10 +123,10 @@ function Banner({
       accessibilityRole={tone === "muted" ? undefined : "alert"}
       className={cn(
         "mx-4 flex-row items-center gap-2 rounded-xl border px-3",
-        shortWindow ? "mb-1 py-1" : "mb-2 py-2",
+        shortWindow ? "mb-1 py-1" : "mb-2 py-1",
         tone === "muted" && "border-hairline bg-panel",
-        tone === "danger" && "border-danger/40 bg-danger/10",
-        tone === "warning" && "border-warning/40 bg-warning/10",
+        tone === "danger" && "border-hairline bg-panel",
+        tone === "warning" && "border-hairline bg-panel",
       )}
     >
       {icon}

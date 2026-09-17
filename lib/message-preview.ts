@@ -9,7 +9,8 @@ export function attachmentLabel(attachment: MessageAttachment): string {
 
 /** Plain text shared by quotes, sidebar previews and reply announcements. */
 export function messageContentPreview(message: ChatMessage): string | undefined {
-  const text = message.text?.trim() || message.card?.title?.trim() || message.card?.text?.trim() || message.card?.subtitle?.trim() ||
+  if (message.kind === "activity") return undefined;
+  const text = message.interaction?.title?.trim() || message.text?.trim() || message.card?.title?.trim() || message.card?.text?.trim() || message.card?.subtitle?.trim() ||
     (message.attachments?.length ? attachmentLabel(message.attachments[0]) : undefined) ||
     message.actions?.[0]?.label || message.card?.links?.[0]?.label || (message.card ? "Card" : undefined);
   return text?.replace(/\s+/g, " ");
