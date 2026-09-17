@@ -55,7 +55,9 @@ jobs:
         run: npm ci
 
       - name: Expo prebuild (Android)
-        run: npx expo prebuild --platform android --non-interactive
+        env:
+          CI: "1"
+        run: npx expo prebuild --platform android
 
       # Device APK only — skip x86/armeabi-v7a native compiles (disk + time on GHA).
       - name: Limit native ABIs for CI
