@@ -1,12 +1,13 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
-import { Plus, Search, Settings, X, CheckCheck } from "lucide-react-native";
+import { Plus, Search, Settings, X, CheckCheck, FolderPlus } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
 import { formatTime, useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
+import { groupedAgents } from "@/lib/groups";
 
 const CONNECTION_DOT = { connected: "bg-success", connecting: "bg-warning", error: "bg-danger", disconnected: "bg-ink-secondary" };
 const STATUS_DOT = { idle: "bg-success", busy: "bg-warning", offline: "bg-ink-secondary" };
@@ -18,7 +19,7 @@ export function AgentSidebar({ query, setQuery, unreadOnly, setUnreadOnly }: {
   unreadOnly: boolean;
   setUnreadOnly: (unreadOnly: boolean) => void;
 }) {
-  const { agents, selectedId, selectAgent, messagesByAgent, draftsByAgent, typing, connection, transportLabel, setSidebarOpen } = useStore();
+  const { agents, selectedId, selectAgent, messagesByAgent, draftsByAgent, typing, connection, transportLabel, setSidebarOpen, groups } = useStore();
   const router = useRouter();
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -126,7 +127,9 @@ export function AgentSidebar({ query, setQuery, unreadOnly, setUnreadOnly }: {
               </Text>
             </View>
           ) : null}
-          {visible.map((agent) => {
+          {groupedAgents(visible, groups).map((section) => <View key={section.id} testID={`sidebar-group-${section.id}`}>
+          {groups.sections.length > 0 ? <Text className="px-3 pb-2 pt-3 text-[12px] font-semibold text-ink-secondary">{section.name}</Text> : null}
+          {section.agents.map((agent) => {
             const selected = selectedId === agent.id;
             const messages = messagesByAgent[agent.id] ?? [];
             const last = [...messages].reverse().find((message) => message.kind === "text");
@@ -159,10 +162,12 @@ export function AgentSidebar({ query, setQuery, unreadOnly, setUnreadOnly }: {
                 </View>
               </AgentRow>
             );
-          })}
+          })}</View>)}
         </View>
       </ScrollView>
       <View className="border-t border-hairline px-3 pt-3" style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
+        <Pressable onPress={() => { setSidebarOpen(false); router.push("/groups"); }} accessibilityRole="button" accessibilityLabel="Manage groups"
+          className="min-h-11 flex-row items-center gap-3 rounded-xl px-3 py-3 active:bg-raised/50"><FolderPlus size={20} color="#b8b8b8" /><Text className="text-[14px] text-ink">Groups</Text></Pressable>
         <Pressable onPress={openSettings} accessibilityRole="button" accessibilityLabel="Open settings"
           className="min-h-11 flex-row items-center gap-3 rounded-xl px-3 py-3 active:bg-raised/50">
           <Settings size={20} color="#b8b8b8" />

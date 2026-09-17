@@ -1,5 +1,36 @@
 import { expect, test } from "@playwright/test";
 
+test("groups retain names, order and bot membership after reload", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Try demo", exact: true }).click();
+  await page.getByRole("button", { name: "Manage groups", exact: true }).click();
+  for (const name of ["Work", "Personal"]) {
+    await page.getByRole("textbox", { name: "New group name", exact: true }).fill(name);
+    await page.getByRole("button", { name: "Create group", exact: true }).click();
+    await expect(page.getByRole("button", { name: `Rename ${name}`, exact: true })).toBeVisible();
+  }
+  await page.getByRole("button", { name: "Move Research to group", exact: true }).click();
+  await page.getByRole("button", { name: "Place Research in Work", exact: true }).click();
+  await page.getByRole("button", { name: "Rename Work", exact: true }).click();
+  await page.getByRole("textbox", { name: "Rename group", exact: true }).fill("Projects");
+  await page.getByRole("button", { name: "Save group name", exact: true }).click();
+  await page.getByRole("button", { name: "Move Personal up", exact: true }).click();
+  await page.getByRole("button", { name: "Close groups", exact: true }).click();
+  const groups = page.locator('[data-testid^="sidebar-group-"]');
+  await expect(groups.nth(0)).toContainText("Personal");
+  await expect(groups.nth(1)).toContainText("Projects");
+  await expect(groups.nth(1).getByRole("button", { name: /^Research[.,]/ })).toBeVisible();
+  await page.reload();
+  await expect(groups.nth(0)).toContainText("Personal");
+  await expect(groups.nth(1)).toContainText("Projects");
+  await expect(groups.nth(1).getByRole("button", { name: /^Research[.,]/ })).toBeVisible();
+  await page.getByRole("button", { name: "Manage groups", exact: true }).click();
+  await page.getByRole("button", { name: "Delete Projects", exact: true }).click();
+  await page.getByRole("button", { name: "Close groups", exact: true }).click();
+  await expect(groups.last()).toContainText("Ungrouped");
+  await expect(groups.last().getByRole("button", { name: /^Research[.,]/ })).toBeVisible();
+});
+
 test("bot manager shows binding details and starts, stops and resets a server session", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("zakura-bot.settings.v1", JSON.stringify({
     zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-token", useMockChannel: false,

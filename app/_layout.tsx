@@ -40,6 +40,7 @@ export default function RootLayout() {
           <Stack.Screen name="index" />
           <Stack.Screen name="login" />
           <Stack.Screen name="bots" />
+          <Stack.Screen name="groups" />
           <Stack.Screen
             name="settings"
             options={{

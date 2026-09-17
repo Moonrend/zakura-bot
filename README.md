@@ -8,7 +8,7 @@ A cross-platform Zakura client for iOS, Android and web. Connect your own instan
 | --- | --- |
 | Zakura login | **Implemented**: browser device authorization, tenant binding consent, rotating refresh credentials, native SecureStore, logout and multiple instances |
 | Bot / Agent management | **Implemented**: authorized roster, binding/profile details, selection, start/stop and fresh sessions |
-| Sidebar groups | Planned: locally persisted sections and ordering |
+| Sidebar groups | **Implemented**: create, rename, sort, assign bots and persist per instance on this device |
 | Send files | Planned: image/file picker, uploads and attachment cards |
 | View desktop | Planned: latest workspace screenshot and refresh |
 | Special messages | Existing: tool activity, errors, system notices, quotes and cards; interactive approval/question support next |
@@ -28,6 +28,8 @@ Access credentials refresh every 30 minutes without changing the device or its h
 **Advanced connection** retains manual device tokens for existing installations. **Try demo** opens local mock conversations without an account. The URL must be reachable from the phone/browser; use HTTPS for a public instance and retain any reverse-proxy path prefix.
 
 Open **Manage bots** in the sidebar or **Bot details** in a conversation. Select an authorized bot, start its session, stop a running turn, or choose **New session** for fresh model context. The transcript keeps earlier messages. Bots and platform bindings are created in Zakura; **Authorize bots** opens another device authorization to choose bindings.
+
+Open **Groups** in the sidebar to create or rename sections, move them up/down, and place bots in a section. Deleting a section returns its bots to Ungrouped. Group layouts persist locally for each saved instance; cloud synchronization is not implemented.
 
 ## Requirements
 

@@ -11,6 +11,8 @@ import { loadSettings, saveSettings, loadProfiles, saveProfile, readCredentials,
 import { CredentialSession, credentialsFromToken, instanceUrl, refreshAuthorization, revokeAuthorization, zakuraRequest,
   type InstanceProfile, type TokenResponse } from "./auth";
 import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type BotSession } from "./types";
+import { emptyGroups, reduceGroups, type BotGroups, type GroupAction } from "./groups";
+import { loadGroups, saveGroups } from "./group-storage";
 
 export type { ChannelError } from "./chat-state";
 
@@ -31,6 +33,9 @@ type StoreValue = {
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
   sessions: Record<string, BotSession>;
   sessionAction: (agentId: string, action: "status" | "start" | "stop" | "new") => Promise<BotSession>;
+  groups: BotGroups;
+  groupsReady: boolean;
+  updateGroups: (action: GroupAction) => Promise<void>;
   connection: ChannelConnectionState;
   connectionDetail?: string;
   transportLabel: string;
@@ -90,6 +95,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [profiles, setProfiles] = useState<InstanceProfile[]>([]);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Record<string, BotSession>>({});
+  const [groups, setGroups] = useState<BotGroups>(emptyGroups);
+  const [groupsReady, setGroupsReady] = useState(false);
+  const groupsRef = useRef(groups);
+  const groupsScopeRef = useRef<string | null>(null);
+  const groupsQueue = useRef<Promise<void>>(Promise.resolve());
   const tokenProviderRef = useRef<(() => Promise<string>) | null>(null);
   const [transportLabel, setTransportLabel] = useState("Mock");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -211,6 +221,30 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const subscription = AppState.addEventListener("change", (state) => { if (state === "active") refresh(); });
     return () => { clearInterval(timer); subscription.remove(); };
   }, [settingsReady, settingsScope, settings.useMockChannel, settings.onboardingComplete]);
+
+  useEffect(() => {
+    if (!settingsReady) return;
+    let cancelled = false;
+    groupsScopeRef.current = null;
+    groupsRef.current = emptyGroups(); setGroups(groupsRef.current); setGroupsReady(false);
+    void loadGroups(settingsScope).then((loaded) => {
+      if (cancelled) return;
+      groupsRef.current = loaded; groupsScopeRef.current = settingsScope; setGroups(loaded); setGroupsReady(true);
+    }).catch((error: unknown) => { if (!cancelled) setAuthNotice(error instanceof Error ? error.message : "Could not load groups."); });
+    return () => { cancelled = true; groupsScopeRef.current = null; };
+  }, [settingsReady, settingsScope]);
+
+  const updateGroups = useCallback((action: GroupAction) => {
+    const scope = groupsScopeRef.current;
+    const pending = groupsQueue.current.catch(() => undefined).then(async () => {
+      if (!scope || scope !== groupsScopeRef.current) throw new Error("Wait for this instance’s groups to load.");
+      const next = reduceGroups(groupsRef.current, action);
+      await saveGroups(scope, next);
+      if (scope === groupsScopeRef.current) { groupsRef.current = next; setGroups(next); }
+    });
+    groupsQueue.current = pending;
+    return pending;
+  }, []);
 
   const selectAgent = useCallback((agentId: string) => dispatch({ type: "select", agentId }), [dispatch]);
   const setDraft = useCallback((agentId: string, text: string) => {
@@ -386,12 +420,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     typing: Object.fromEntries(state.agents.map((agent) => [agent.id, isAgentWorking(state, agent.id)])),
     interrupting: state.interrupting, connection: state.connection,
     connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
-    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction,
+    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
     sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, interrupt, reconnect,
     dismissError, updateSettings, setSidebarOpen, setThreadVisible,
   }), [state, settings, settingsReady, transportLabel, lastError, sidebarOpen, selectAgent, setDraft,
     clearDraft, send, retryMessage, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
-    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction]);
+    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
