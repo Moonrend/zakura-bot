@@ -86,7 +86,7 @@ def patch_gradle_properties() -> None:
     t = upsert_prop(t, "org.gradle.parallel", "false")
     t = upsert_prop(t, "org.gradle.workers.max", "2")
     t = upsert_prop(t, "org.gradle.daemon", "false")
-    t = upsert_prop(t, "org.gradle.caching", "false")
+    t = upsert_prop(t, "org.gradle.caching", "true")
     # Single ABI already set by workflow; reinforce here.
     t = upsert_prop(t, "reactNativeArchitectures", "arm64-v8a")
     PROPS.write_text(t)
