@@ -6,6 +6,7 @@ import { LiveZakuraChannelClient } from "../lib/channel/live-client";
 import type { ChannelEvent } from "../lib/channel/types";
 import { botFilePath, parseUploadedFile } from "../lib/files";
 import { zakuraBinaryRequest, zakuraRequest } from "../lib/auth";
+import { desktopPath, parseDesktopInfo } from "../lib/desktop";
 
 const serverRoot = resolve(process.env.ZAKURA_SERVER_PATH ?? "../Zakura");
 test("the app client uploads, delivers and downloads files through Zakura's real HTTP/WS/DB stack", async () => {
@@ -51,4 +52,26 @@ test("the app client uploads, delivers and downloads files through Zakura's real
     await client.sendMessage({ agentId, text: "", attachments: [file], clientMessageId: "integration-file" });
     assert.equal(h.runs.length, before);
   } finally { client?.disconnect(); await h.close(); }
+});
+
+test("the app receives a complete desktop frame from Zakura without exposing runner addresses", async () => {
+  const { zakurabotHarness } = await import(pathToFileURL(resolve(serverRoot, "apps/server/test/helpers/zakurabot.ts")).href);
+  const { agents } = await import(pathToFileURL(resolve(serverRoot, "apps/server/src/db/schema.ts")).href);
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP9sAAAAASUVORK5CYII=", "base64");
+  const h = await zakurabotHarness({ workspace: {
+    async getDesktopInfo() { return { enabled: true, supported: true, width: 1, height: 1, cdpUrl: "http://private-runner:9222" }; },
+    async ensureStarted() { return {}; },
+    async execInWorkspace() { return { stdout: png.toString("base64"), stderr: "", exitCode: 0 }; },
+  } });
+  try {
+    const context = await h.access(), agentId: string = context.bindings[0].agentId;
+    await h.db.update(agents).set({ enableComputer: true });
+    const headers = { Authorization: `Bearer ${context.token}` };
+    const raw = await zakuraRequest(h.url, desktopPath(agentId), { headers });
+    assert.equal(JSON.stringify(raw).includes("private-runner"), false);
+    assert.equal(parseDesktopInfo(raw).supported, true);
+    const frame = await zakuraBinaryRequest(h.url, desktopPath(agentId, true), { headers });
+    assert.equal(frame.contentType, "image/png");
+    assert.deepEqual(Buffer.from(await frame.blob.arrayBuffer()), png);
+  } finally { await h.close(); }
 });

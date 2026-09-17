@@ -10,7 +10,7 @@ A cross-platform Zakura client for iOS, Android and web. Connect your own instan
 | Bot / Agent management | **Implemented**: authorized roster, binding/profile details, selection, start/stop and fresh sessions |
 | Sidebar groups | **Implemented**: create, rename, sort, assign bots and persist per instance on this device |
 | Send files | **Implemented**: photo/file picker, paste/drop on web, uploads with retry, attachment-only sends, image previews and authenticated downloads |
-| View desktop | Planned: latest workspace screenshot and refresh |
+| View desktop | **Implemented**: conversation desktop page, authenticated screenshots, refresh, automatic updates and capture recovery |
 | Special messages | Existing: tool activity, errors, system notices, quotes and cards; interactive approval/question support next |
 
 The matching server changes are in [Zakura PR #15](https://github.com/Moonrend/Zakura/pull/15), branch `feat/zakurabot-channel`. Both repositories must be deployed for browser authorization. Production model/device use and native installation have not been verified against a deployed instance.
@@ -34,6 +34,8 @@ Open **Groups** in the sidebar to create or rename sections, move them up/down, 
 In a connected bot conversation, tap **+ → Photos / Files**, or paste/drop files on web. The bot must have filesystem access enabled in Zakura. Upload up to 8 nonempty files, each at most 16 MiB; wait for **Ready to send**, optionally add text, then Send. Uploads stay with their bot when switching conversations and can be retried or removed. Tap an attachment to preview supported images or **Download** (the native share/save sheet on iOS and Android). Device credentials stay in request headers, including downloads. Unsent file drafts are held in memory and clear on reload or instance switch.
 
 Login supports the server's S256 proof key and separate API/browser authorization hosts. Deploy the matching server branch for uploads and the extended device APIs.
+
+Tap the **monitor icon** in a conversation to open the bot's desktop. Enable **Computer** on the agent in Zakura first. **Refresh** captures the latest screen; **Auto-refresh** follows it while the page is visible. Failed refreshes retain the last successful capture, and Done returns to the chat draft. This release provides viewing; mouse/keyboard control and VNC are not implemented in the app.
 
 ## Requirements
 
