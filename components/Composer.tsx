@@ -167,7 +167,12 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
           }}
         />
         {busy ? (
-          <Pressable key="stop" ref={setActionRef} onPress={() => void interrupt()} disabled={offline || stopping}
+          <Pressable key="stop" ref={setActionRef} onPress={() => {
+            // Disabling the pending Stop button blurs it before its eventual
+            // removal. Preserve keyboard focus before requesting the interrupt.
+            if (Platform.OS === "web" && document.activeElement === (actionRef.current as unknown as HTMLElement)) inputRef.current?.focus();
+            void interrupt();
+          }} disabled={offline || stopping}
             className="h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink active:opacity-80"
             accessibilityRole="button" accessibilityLabel={stopping ? "Stopping reply" : "Stop generating"}
             aria-busy={stopping} accessibilityState={{ disabled: offline || stopping, busy: stopping }}>

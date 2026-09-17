@@ -415,6 +415,50 @@ test("duplicate stream announcements and tokens after a turn ends cannot reopen 
   assert.equal(events.length, count);
 });
 
+test("reconnect replays cannot restart settled replies or tools and block Stop recovery", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const terminal of ["done", "stopped", "disconnected"] as const) {
+    const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+    t.after(() => client.disconnect());
+    await client.connect(); sockets[0].open(); sockets[0].ready();
+    const reply = { type: "chat_reply", agentId: "a", messageId: "reply", createdAt: 1, streaming: true, payload: {} };
+    const tool = { type: "tool_activity", agentId: "a", message: { id: "tool", agentId: "a", role: "assistant", kind: "activity",
+      createdAt: 2, tool: { name: "search" } } };
+    sockets[0].frame(reply);
+    sockets[0].frame({ type: "message_delta", agentId: "a", messageId: "reply", delta: "Keep this content" });
+    sockets[0].frame(tool);
+    if (terminal === "done") {
+      sockets[0].frame({ type: "message_done", agentId: "a", messageId: "reply" });
+      sockets[0].frame({ ...tool, message: { ...tool.message, tool: { name: "search", ok: true } } });
+    } else if (terminal === "stopped") sockets[0].frame({ type: "typing", agentId: "a", active: false });
+    sockets[0].remoteClose(1006);
+    t.mock.timers.tick(1000);
+    const socket = sockets[1]; socket.open();
+    socket.frame({ type: "ready", protocol: 1, agents: agents.map((agent) => ({ ...agent, status: "busy" })) });
+    const count = events.length;
+    socket.frame(reply);
+    socket.frame(tool);
+    socket.frame({ type: "message_delta", agentId: "a", messageId: "reply", delta: "Replayed tokens" });
+    assert.equal(events.length, count, `${terminal}: old announcements must not revive output on the new socket`);
+    await client.interrupt("a");
+    socket.frame({ type: "agents", agents });
+    assert.deepEqual(events.at(-1), { type: "interrupt_pending", agentId: "a", pending: false });
+    t.mock.timers.tick(100);
+    assert.equal(events.some((event) => event.type === "error"), false);
+    socket.frame({ ...reply, streaming: false, payload: { text: "Complete server snapshot" } });
+    assert.equal(events.at(-1)?.type, "message", "complete snapshots still restore interrupted replies");
+    socket.frame({ ...reply, messageId: "new-reply" });
+    socket.frame({ type: "message_delta", agentId: "a", messageId: "new-reply", delta: "New content" });
+    assert.equal(events.at(-1)?.type, "message_delta", "new reply ids can still stream");
+    socket.frame({ type: "agents", agents: [agents[1]] });
+    socket.frame({ type: "agents", agents });
+    socket.frame(reply);
+    socket.frame(tool);
+    assert.equal(events.at(-1)?.type, "tool_activity", "roster revocation clears the old conversation's lifecycle");
+    client.disconnect();
+  }
+});
+
 test("pending idempotency keys cannot be rewritten and late rejections cannot fail accepted sends", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 100 });

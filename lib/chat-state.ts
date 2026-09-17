@@ -90,6 +90,9 @@ function putMessage(state: ChatState, incoming: ChatMessage): ChatState {
       (serverId && incoming.id !== serverId && incoming.id !== previous.id) ||
       (incoming.clientMessageId && !ownsId(previous, incoming.clientMessageId))) return state;
   }
+  // A replacement client can replay a stream announcement. Keep received text
+  // and its terminal state until a complete snapshot restores the old reply.
+  if (previous && !previous.streaming && incoming.streaming) return state;
   // A replayed start must not resurrect a completed or disconnected tool chip.
   if (previous?.tool && !activeOutput(previous) && activeOutput(incoming)) return state;
   const stableId = previous?.id ?? incomingId;

@@ -39,12 +39,18 @@ function StreamingCursor() {
   return <Text aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="text-accent-border">▍</Text>;
 }
 
-const TOKEN = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g;
+// Excluding nested '[' also keeps long, unfinished labels from rescanning the
+// remaining line at every opening bracket while a reply is streaming.
+const TOKEN = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\[\]]+\]\(https?:\/\/[^\s)]+\))/g;
 function renderInline(line: string) {
-  return line.split(TOKEN).filter(Boolean).map((part, index) => {
+  return line.split(TOKEN).map((part, index) => {
+    if (!part) return null;
+    // split places captured tokens at odd indices. Literal pieces can also
+    // start/end with delimiters, but must never lose those unmatched characters.
+    if (index % 2 === 0) return <Text key={index}>{part}</Text>;
     if (part.startsWith("**") && part.endsWith("**")) return <Text key={index} className="font-semibold">{part.slice(2, -2)}</Text>;
     if (part.startsWith("`") && part.endsWith("`")) return <Text key={index} className="bg-inset font-mono text-[13px] text-ink">{part.slice(1, -1)}</Text>;
-    const link = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(part);
+    const link = /^\[([^\[\]]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(part);
     if (link) return <ExternalLink key={index} label={link[1]} url={link[2]} />;
     return <Text key={index}>{part}</Text>;
   });

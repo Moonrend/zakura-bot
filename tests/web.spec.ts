@@ -16,6 +16,123 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("reconnect keeps settled stream text and tool chips while an idle roster confirms Stop", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  let connections = 0;
+  let interrupts = 0;
+  const stream = { type: "chat_reply", agentId: "live", messageId: "stream", createdAt: 1, streaming: true, payload: {} };
+  const tool = { type: "tool_activity", agentId: "live", message: { id: "tool", agentId: "live", role: "assistant", kind: "activity",
+    createdAt: 2, tool: { name: "search", detail: "Read the available sources" } } };
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") {
+        connections += 1;
+        socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "busy" }] }));
+        socket.send(JSON.stringify(stream));
+        socket.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "stream", delta: connections === 1 ? "Keep the received text" : "Stale replay" }));
+        socket.send(JSON.stringify(tool));
+        if (connections === 1) socket.send(JSON.stringify({ ...tool, message: { ...tool.message, tool: { ...tool.message.tool, ok: true } } }));
+      }
+      if (frame.type === "interrupt") interrupts += 1;
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  const reply = page.getByTestId("message-stream");
+  await expect(reply).toContainText("Keep the received text");
+  await expect(page.getByRole("button", { name: "Tool search, Done", exact: true })).toBeVisible();
+  await input.fill("Keep this next draft");
+  channel!.close({ code: 1011, reason: "test reconnect during a reply" });
+  await expect.poll(() => connections).toBe(2);
+  await expect(reply).toContainText("Keep the received text");
+  await expect(reply).toContainText("Stopped");
+  await expect(reply).not.toContainText("Stale replay");
+  await expect(page.getByRole("button", { name: "Tool search, Done", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Stop generating", exact: true }).press("Enter");
+  await expect.poll(() => interrupts).toBe(1);
+  await expect(page.getByRole("button", { name: "Stopping reply", exact: true })).toBeDisabled();
+  await expect(input).toBeFocused();
+  channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "idle" }] }));
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this next draft");
+  channel!.send(JSON.stringify({ ...stream, streaming: false, payload: { text: "Complete server snapshot" } }));
+  await expect(reply).toContainText("Complete server snapshot");
+  await expect(reply).not.toContainText("Stopped");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("short sidebars scroll the search controls so keyboard-selected conversations remain visible", async ({ page }) => {
+  for (const width of [320, 1440]) {
+    await page.setViewportSize({ width: 1440, height: 700 });
+    await mockReady(page);
+    await page.setViewportSize({ width, height: 568 });
+    if (width < 768) await page.getByRole("button", { name: "Open agent list", exact: true }).click();
+    const search = page.getByRole("textbox", { name: "Search agents", exact: true });
+    await search.fill("Ops");
+    await page.setViewportSize({ width, height: 240 });
+    for (let index = 0; index < 4; index++) await page.keyboard.press("Tab");
+    const choice = agent(page, "Ops");
+    await expect(choice).toBeFocused();
+    await expect(choice).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole("button", { name: "Open settings", exact: true })).toBeInViewport({ ratio: 1 });
+    await choice.press("Enter");
+    await expect(page.getByRole("textbox", { name: "Message Ops", exact: true })).toBeVisible();
+    await noOverflow(page);
+  }
+  await accessible(page);
+});
+
+test("pinned sidebar search never covers a conversation reached with Shift+Tab", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 568 });
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: Array.from({ length: 12 }, (_, index) => ({ id: `a${index}`, name: `Agent ${index}`, status: "idle" })) }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  await agent(page, "Agent 11").focus();
+  for (let index = 11; index >= 0; index--) {
+    if (index < 11) await page.keyboard.press("Shift+Tab");
+    const choice = agent(page, `Agent ${index}`);
+    await expect(choice).toBeFocused();
+    await expect.poll(() => choice.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      // Intersection alone misses an opaque sticky header covering the row.
+      return [rect.top + 2, rect.bottom - 2].every((y) => element.contains(document.elementFromPoint(rect.left + rect.width / 2, y)));
+    })).toBe(true);
+    await expect(page.getByRole("textbox", { name: "Search agents", exact: true })).toBeInViewport({ ratio: 1 });
+  }
+});
+
+test("unmatched Markdown delimiters remain visible in chat_reply bodies", async ({ page }) => {
+  const texts = ["**", "****", "`", "``", "````", "**not *bold**", "[".repeat(2000)];
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      texts.forEach((text, index) => socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `literal-${index}`,
+        createdAt: index, payload: { text } })));
+      socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "formatted", createdAt: texts.length,
+        payload: { text: "**Bold** and `code` with [Docs](https://example.com/docs)" } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  for (const [index, text] of texts.entries()) {
+    await expect(page.getByTestId(`message-literal-${index}`).getByTestId("message-text")).toHaveText(text);
+  }
+  await expect(page.getByTestId("message-formatted").getByTestId("message-text")).toHaveText("Bold and code with Docs");
+  await expect(page.getByRole("link", { name: "Docs, opens in browser", exact: true })).toHaveAttribute("href", "https://example.com/docs");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await noOverflow(page);
+});
+
 test("conflicting output receipt ids keep delivery pending until a valid echo arrives", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   let sent: { clientMessageId: string; text: string } | undefined;

@@ -114,8 +114,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pongTimer: Timer | null = null;
   private roster = new Map<string, Agent["status"]>();
-  // Retain completed ids until disconnect so a repeated announcement cannot
-  // reopen a finished reply. A reconnect starts a fresh snapshot/stream scope.
+  // Retain settled ids across sockets so replayed starts cannot reopen output.
+  // Without a stream cursor, only a complete snapshot can restore an old reply.
   private replies = new Map<string, { agentId: string; active: boolean }>();
   private activities = new Map<string, { agentId: string; active: boolean }>();
   private liveTyping = new Set<string>();
@@ -511,8 +511,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   private releaseSocket() {
     this.clearSocketTimers();
     this.clearRequestTimers();
-    this.replies.clear();
-    this.activities.clear();
+    for (const output of [this.replies, this.activities]) {
+      for (const item of output.values()) item.active = false;
+    }
     this.liveTyping.clear();
     this.roster.clear();
     const socket = this.socket;

@@ -318,6 +318,30 @@ test("replayed tool starts cannot resurrect completed, cancelled or disconnected
   }
 });
 
+test("replacement-client stream announcements preserve settled text until a complete snapshot arrives", () => {
+  for (const terminal of ["done", "stopped", "disconnected"] as const) {
+    let state = initial();
+    state = chatReducer(state, { type: "draft", agentId: "a", text: "Keep the next draft" });
+    state = chatReducer(state, { type: "message", message: { ...reply("stream", "a", ""), streaming: true } });
+    state = chatReducer(state, { type: "message_delta", agentId: "a", messageId: "stream", delta: "Keep the received text" });
+    if (terminal === "done") state = chatReducer(state, { type: "message_done", agentId: "a", messageId: "stream" });
+    else if (terminal === "stopped") state = chatReducer(state, { type: "typing", agentId: "a", active: false });
+    else state = chatReducer(state, { type: "connection", state: "error" });
+    state = chatReducer(state, { type: "connection", state: "connected" });
+    state = chatReducer(state, { type: "select", agentId: "b" });
+    const settled = state.messagesByAgent.a[0];
+    state = chatReducer(state, { type: "message", message: { ...reply("stream", "a", ""), streaming: true } });
+    state = chatReducer(state, { type: "message_delta", agentId: "a", messageId: "stream", delta: "Replayed tokens" });
+    assert.equal(state.messagesByAgent.a[0], settled);
+    assert.equal(isAgentWorking(state, "a"), false);
+    assert.equal(state.agents[0].unread, false);
+    assert.equal(state.draftsByAgent.a, "Keep the next draft");
+    state = chatReducer(state, { type: "message", message: { ...reply("stream", "a", "Complete server snapshot"), streaming: false, interrupted: false } });
+    assert.equal(state.messagesByAgent.a[0].text, "Complete server snapshot");
+    assert.equal(state.messagesByAgent.a[0].interrupted, false);
+  }
+});
+
 test("an unconfirmed or rejected send cannot clear typing before the first visible reply", () => {
   let state = initial();
   state = chatReducer(state, { type: "optimistic", message: { ...reply("user"), role: "user" } });
