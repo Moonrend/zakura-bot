@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 import {
-  createChannelClient, createDemoMessages, uid, validateLiveSettings,
+  createChannelClient, createDemoMessages, uid, validateLiveSettings, zakuraSocketUrl,
   type ChannelConnectionState, type ZakuraChannelClient,
 } from "./channel";
 import { DEMO_AGENTS } from "./channel/mock-client";
@@ -42,6 +42,14 @@ type StoreValue = {
 
 const StoreContext = createContext<StoreValue | null>(null);
 
+function channelScope(settings: AppSettings): string {
+  if (settings.useMockChannel) return "mock";
+  let endpoint = settings.zakuraBaseUrl.trim();
+  try { endpoint = zakuraSocketUrl(endpoint); }
+  catch { /* Invalid saved settings still reach the client's validation banner. */ }
+  return JSON.stringify([endpoint, settings.authToken.trim()]);
+}
+
 function demoTranscript(): Record<string, ChatMessage[]> {
   return {
     agent_zakura: createDemoMessages("agent_zakura"),
@@ -62,6 +70,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const settingsRef = useRef(settings);
+  const settingsScope = useMemo(() => channelScope(settings), [settings]);
   const [settingsReady, setSettingsReady] = useState(false);
   const [transportLabel, setTransportLabel] = useState("Mock");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -95,7 +104,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const bootClient = useCallback((nextSettings: AppSettings) => {
     disposeRef.current?.();
     dispatch({ type: "connection", state: "disconnected" });
-    const scope = nextSettings.useMockChannel ? "mock" : JSON.stringify([nextSettings.zakuraBaseUrl, nextSettings.authToken]);
+    const scope = channelScope(nextSettings);
     // A different server/token must never inherit another channel's roster or drafts.
     if (scope !== scopeRef.current) {
       const messages = nextSettings.useMockChannel ? demoTranscript() : {};
@@ -135,9 +144,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!settingsReady) return;
-    bootClient(settings);
+    // Formatting an equivalent URL or editing unused mock credentials must
+    // not interrupt output, lose drafts, or replace the client's retry ids.
+    bootClient(settingsRef.current);
     return () => { disposeRef.current?.(); disposeRef.current = null; };
-  }, [settingsReady, settings, bootClient]);
+  }, [settingsReady, settingsScope, bootClient]);
 
   const selectAgent = useCallback((agentId: string) => dispatch({ type: "select", agentId }), [dispatch]);
   const setDraft = useCallback((agentId: string, text: string) => {
@@ -202,7 +213,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const client = clientRef.current;
     if (!client) { bootClient(settingsRef.current); return; }
     // Keep idempotency keys and receipt aliases for this channel identity.
-    // Settings changes still create a new client and reset its scoped data.
+    // A different endpoint, token or mode creates a new client and scoped data.
     client.disconnect();
     try { await client.connect(); }
     catch (error) {

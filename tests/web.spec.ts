@@ -1127,6 +1127,83 @@ test("mobile drawer, Escape, offline drafts, touch layout and accessibility", as
   await accessible(page);
 });
 
+test("equivalent live settings retain drafts, streams and pending delivery and Stop requests", async ({ page }) => {
+  const channels: WebSocketRoute[] = [];
+  const sends: { clientMessageId: string; text: string }[] = [];
+  let interrupts = 0;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channels.push(socket);
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      if (frame.type === "send") sends.push(frame);
+      if (frame.type === "interrupt") interrupts++;
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Awaiting delivery");
+  await input.press("Enter");
+  await expect.poll(() => sends.length).toBe(1);
+  await input.fill("Keep my next draft");
+  channels[0].send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "reply", createdAt: Date.now(),
+    streaming: true, payload: { text: "Still working" } }));
+  await page.getByRole("button", { name: "Stop generating", exact: true }).click();
+  await expect.poll(() => interrupts).toBe(1);
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await page.getByLabel("Zakura Base URL", { exact: true }).fill("ws://127.0.0.1:4173/api/zakurabot/ws/");
+  await page.getByRole("button", { name: "Save settings", exact: true }).click();
+  await expect(page.getByText("Settings saved on this device.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  await expect(input).toHaveValue("Keep my next draft");
+  expect(channels).toHaveLength(1);
+  await expect(page.getByRole("button", { name: "Stopping reply", exact: true })).toBeVisible();
+  const user = page.getByTestId(`message-${sends[0].clientMessageId}`);
+  await expect(user).toContainText("Sending…");
+  channels[0].send(JSON.stringify({ type: "message", message: { id: "server-user", agentId: "live", role: "user", kind: "text",
+    ...sends[0], createdAt: Date.now() } }));
+  channels[0].send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "reply", delta: " on the same connection" }));
+  channels[0].send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "reply", interrupted: true }));
+  channels[0].send(JSON.stringify({ type: "typing", agentId: "live", active: false }));
+  await expect(user).not.toContainText("Sending…");
+  await expect(page.getByTestId("message-reply")).toContainText("Still working on the same connection");
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  expect(sends).toHaveLength(1);
+
+  // A different credential must still isolate messages and drafts,
+  // even when its roster reuses exactly the same agent ids.
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await page.getByLabel("Auth token", { exact: true }).fill("another-device-token");
+  await page.getByRole("button", { name: "Save settings", exact: true }).click();
+  await expect(page.getByText("Settings saved on this device.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  await expect(input).toHaveValue("");
+  await expect.poll(() => channels.length).toBe(2);
+  await expect(page.getByTestId("message-reply")).toHaveCount(0);
+  await expect(user).toHaveCount(0);
+});
+
+test("saving unused live credentials keeps the current mock reply and next draft", async ({ page }) => {
+  await mockReady(page);
+  const input = page.getByRole("textbox", { name: "Message Zakura", exact: true });
+  await input.fill("slow");
+  await input.press("Enter");
+  const reply = page.locator('[data-testid^="message-asst_"]');
+  await expect(reply).toContainText("Replying…");
+  await input.fill("Keep the mock draft");
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await page.getByLabel("Zakura Base URL", { exact: true }).fill("https://next-server.example.com");
+  await page.getByLabel("Auth token", { exact: true }).fill("future-device-token");
+  await page.getByRole("button", { name: "Save settings", exact: true }).click();
+  await expect(page.getByText("Settings saved on this device.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  await expect(input).toHaveValue("Keep the mock draft");
+  await expect(reply).not.toContainText("Stopped");
+  await expect(reply).toContainText("Interrupted replies keep the text received so far and are marked as stopped.", { timeout: 10_000 });
+});
+
 test("direct settings load, validation and persistence survive reload", async ({ page }) => {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(({ key }) => {

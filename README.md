@@ -142,6 +142,8 @@ In Zakura, add an enabled **Zakura Bot** binding to the agent, configure its mod
 
 Settings persist locally in AsyncStorage (browser localStorage on web). Native SecureStore integration is not implemented. Do **not** put tokens in the repo or committed `.env` files.
 
+Saving an equivalent Base URL keeps the current connection, drafts, replies and pending requests. Preparing live credentials while using the mock channel also leaves the demo running. Changing the actual WebSocket endpoint, device token or channel mode starts a separate conversation scope.
+
 ## Project layout
 
 ```text
@@ -217,6 +219,8 @@ npm run typecheck && npm test
 ### 设置
 
 在 Zakura 为 Agent 添加 **Zakura Bot** 绑定、配置模型并创建设备。在侧边栏 **Settings** 填入设备的 **Base URL** 与 **Token**，关闭 **Use mock channel**。普通 API / 管理员 Token 不能连接该消息通道；演示模式保持 Mock 开启。
+
+保存等价的 Base URL（如增删末尾斜杠）会保留连接、草稿、回复和待确认请求；Mock 模式下准备 Live 参数也不会中断演示。更换实际 WebSocket 地址、设备 Token 或通道模式时，会隔离并清空旧会话数据。
 
 
 ### CI / 打包
