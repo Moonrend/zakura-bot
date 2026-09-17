@@ -82,10 +82,13 @@ export interface AppSettings {
   authToken: string;
   /** When true, use MockZakuraChannelClient instead of a live transport */
   useMockChannel: boolean;
+  profileId?: string;
+  onboardingComplete?: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   zakuraBaseUrl: "http://127.0.0.1:8787",
   authToken: "",
   useMockChannel: true,
+  onboardingComplete: false,
 };

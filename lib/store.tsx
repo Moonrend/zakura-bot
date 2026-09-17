@@ -7,7 +7,9 @@ import {
 import { DEMO_AGENTS } from "./channel/mock-client";
 import { MAX_MESSAGE_LENGTH } from "./channel/types";
 import { chatReducer, emptyChatState, isAgentWorking, previewFromMessages, type ChatAction, type ChannelError } from "./chat-state";
-import { loadSettings, saveSettings } from "./settings";
+import { loadSettings, saveSettings, loadProfiles, saveProfile, readCredentials, writeCredentials, removeProfile } from "./settings";
+import { CredentialSession, credentialsFromToken, instanceUrl, refreshAuthorization, revokeAuthorization, zakuraRequest,
+  type InstanceProfile, type TokenResponse } from "./auth";
 import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage } from "./types";
 
 export type { ChannelError } from "./chat-state";
@@ -21,6 +23,12 @@ type StoreValue = {
   interrupting: Record<string, boolean>;
   settings: AppSettings;
   settingsReady: boolean;
+  profiles: InstanceProfile[];
+  authNotice: string | null;
+  finishSignIn: (baseUrl: string, tokens: TokenResponse) => Promise<void>;
+  switchInstance: (id: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  request: <T>(path: string, init?: RequestInit) => Promise<T>;
   connection: ChannelConnectionState;
   connectionDetail?: string;
   transportLabel: string;
@@ -47,7 +55,12 @@ function channelScope(settings: AppSettings): string {
   let endpoint = settings.zakuraBaseUrl.trim();
   try { endpoint = zakuraSocketUrl(endpoint); }
   catch { /* Invalid saved settings still reach the client's validation banner. */ }
-  return JSON.stringify([endpoint, settings.authToken.trim()]);
+  return JSON.stringify([endpoint, settings.profileId ?? settings.authToken.trim()]);
+}
+
+function sameEndpoint(left: string, right: string): boolean {
+  try { return zakuraSocketUrl(left) === zakuraSocketUrl(right); }
+  catch { return left.trim() === right.trim(); }
 }
 
 function demoTranscript(): Record<string, ChatMessage[]> {
@@ -72,6 +85,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const settingsRef = useRef(settings);
   const settingsScope = useMemo(() => channelScope(settings), [settings]);
   const [settingsReady, setSettingsReady] = useState(false);
+  const [profiles, setProfiles] = useState<InstanceProfile[]>([]);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const tokenProviderRef = useRef<(() => Promise<string>) | null>(null);
   const [transportLabel, setTransportLabel] = useState("Mock");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const clientRef = useRef<ZakuraChannelClient | null>(null);
@@ -113,7 +129,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "reset", agents, messages });
       scopeRef.current = scope;
     }
-    const client = createChannelClient(nextSettings);
+    let session: Promise<CredentialSession> | undefined;
+    const getToken = async () => {
+      if (!nextSettings.profileId) return nextSettings.authToken;
+      const profileId = nextSettings.profileId;
+      session ??= readCredentials(profileId).then((credentials) => {
+        if (!credentials) throw new Error("Sign in to this Zakura instance again.");
+        return new CredentialSession(credentials, (token) => refreshAuthorization(nextSettings.zakuraBaseUrl, token), async (next) => {
+          await writeCredentials(profileId, next);
+          if (settingsRef.current.profileId === profileId) {
+            settingsRef.current = { ...settingsRef.current, authToken: next.accessToken };
+            setSettings(settingsRef.current);
+          }
+        });
+      });
+      return (await session).getToken();
+    };
+    tokenProviderRef.current = getToken;
+    const client = createChannelClient(nextSettings, nextSettings.profileId ? getToken : undefined);
     clientRef.current = client;
     setTransportLabel(client.label);
     const unsubscribe = client.subscribe((event) => {
@@ -133,22 +166,47 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    void loadSettings().then((loaded) => {
+    void loadSettings().then(async (loaded) => {
+      const savedProfiles = await loadProfiles();
       if (cancelled) return;
+      setProfiles(savedProfiles);
       settingsRef.current = loaded;
       setSettings(loaded);
+      setSettingsReady(true);
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      setAuthNotice(error instanceof Error ? error.message : "Could not read saved credentials.");
       setSettingsReady(true);
     });
     return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (!settingsReady) return;
+    if (!settingsReady || !settings.onboardingComplete) {
+      disposeRef.current?.();
+      dispatch({ type: "reset", agents: [], messages: {} });
+      scopeRef.current = null;
+      return;
+    }
     // Formatting an equivalent URL or editing unused mock credentials must
     // not interrupt output, lose drafts, or replace the client's retry ids.
     bootClient(settingsRef.current);
     return () => { disposeRef.current?.(); disposeRef.current = null; };
-  }, [settingsReady, settingsScope, bootClient]);
+  }, [settingsReady, settingsScope, settings.onboardingComplete, bootClient, dispatch]);
+
+  useEffect(() => {
+    if (!settingsReady || settings.useMockChannel || !settings.onboardingComplete) return;
+    const refresh = () => {
+      const client = clientRef.current;
+      const before = settingsRef.current.authToken;
+      void tokenProviderRef.current?.().then((token) => {
+        if (clientRef.current === client && token !== before && client?.getConnectionState() === "error") void client.connect();
+      }).catch((error: unknown) => setAuthNotice(error instanceof Error ? error.message : "Sign in again to refresh your login."));
+    };
+    const timer = setInterval(refresh, 30_000);
+    const subscription = AppState.addEventListener("change", (state) => { if (state === "active") refresh(); });
+    return () => { clearInterval(timer); subscription.remove(); };
+  }, [settingsReady, settingsScope, settings.useMockChannel, settings.onboardingComplete]);
 
   const selectAgent = useCallback((agentId: string) => dispatch({ type: "select", agentId }), [dispatch]);
   const setDraft = useCallback((agentId: string, text: string) => {
@@ -234,11 +292,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const next = { ...settingsRef.current, ...patch };
       next.zakuraBaseUrl = next.zakuraBaseUrl.trim();
       next.authToken = next.authToken.trim();
+      if (patch.onboardingComplete === undefined) next.onboardingComplete = true;
+      if (patch.profileId === undefined && (next.authToken !== settingsRef.current.authToken ||
+        !sameEndpoint(next.zakuraBaseUrl, settingsRef.current.zakuraBaseUrl))) {
+        next.profileId = next.authToken ? uid("manual") : undefined;
+      }
       if (!next.useMockChannel) {
         const problem = validateLiveSettings({ baseUrl: next.zakuraBaseUrl, token: next.authToken });
         if (problem) throw new Error(problem);
       }
       await saveSettings(next);
+      setProfiles(await loadProfiles());
+      setAuthNotice(null);
       if (JSON.stringify(next) !== JSON.stringify(settingsRef.current)) {
         settingsRef.current = next;
         setSettings(next);
@@ -248,16 +313,59 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return pending;
   }, []);
 
+  const finishSignIn = useCallback(async (baseUrl: string, tokens: TokenResponse) => {
+    const credentials = credentialsFromToken(tokens);
+    const profile: InstanceProfile = { id: uid("instance"), baseUrl: instanceUrl(baseUrl),
+      label: tokens.tenant.name, tenantName: tokens.tenant.name, deviceId: tokens.device.id, bindingIds: tokens.device.bindingIds };
+    await saveProfile(profile, credentials);
+    await updateSettings({ zakuraBaseUrl: profile.baseUrl, authToken: credentials.accessToken, profileId: profile.id,
+      useMockChannel: false, onboardingComplete: true });
+  }, [updateSettings]);
+
+  const switchInstance = useCallback(async (id: string) => {
+    const profile = (await loadProfiles()).find((item) => item.id === id);
+    const credentials = profile ? await readCredentials(id) : null;
+    if (!profile || !credentials) throw new Error("This instance needs a new login. Use Add instance to sign in.");
+    await updateSettings({ zakuraBaseUrl: profile.baseUrl, authToken: credentials.accessToken, profileId: id,
+      useMockChannel: false, onboardingComplete: true });
+  }, [updateSettings]);
+
+  const signOut = useCallback(async () => {
+    const current = settingsRef.current;
+    disposeRef.current?.();
+    let notice: string | null = null;
+    // Settle a rotation before revoking, so its newly issued refresh token cannot escape logout.
+    await tokenProviderRef.current?.().catch(() => undefined);
+    const credentials = current.profileId ? await readCredentials(current.profileId) : null;
+    if (!current.useMockChannel && (credentials || current.authToken)) {
+      try { await revokeAuthorization(current.zakuraBaseUrl, credentials?.refreshToken ?? credentials?.accessToken ?? current.authToken); }
+      catch { notice = "Signed out on this device. Zakura was unreachable; revoke the device in Zakura to end its server access."; }
+    }
+    if (current.profileId) await removeProfile(current.profileId);
+    await updateSettings({ authToken: "", profileId: "", useMockChannel: true, onboardingComplete: false });
+    setAuthNotice(notice);
+  }, [updateSettings]);
+
+  const request = useCallback(async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+    const current = settingsRef.current;
+    if (current.useMockChannel) throw new Error("Connect a Zakura instance to use this feature.");
+    const token = await tokenProviderRef.current?.() ?? current.authToken;
+    if (settingsRef.current.profileId !== current.profileId) throw new Error("The active instance changed. Please try again.");
+    return zakuraRequest<T>(current.zakuraBaseUrl, path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${token}` } });
+  }, []);
+
   const value = useMemo<StoreValue>(() => ({
     agents: state.agents, selectedId: state.selectedId, messagesByAgent: state.messagesByAgent,
     draftsByAgent: state.draftsByAgent,
     typing: Object.fromEntries(state.agents.map((agent) => [agent.id, isAgentWorking(state, agent.id)])),
     interrupting: state.interrupting, connection: state.connection,
     connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
+    profiles, authNotice, finishSignIn, switchInstance, signOut, request,
     sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, interrupt, reconnect,
     dismissError, updateSettings, setSidebarOpen, setThreadVisible,
   }), [state, settings, settingsReady, transportLabel, lastError, sidebarOpen, selectAgent, setDraft,
-    clearDraft, send, retryMessage, interrupt, reconnect, dismissError, updateSettings, setThreadVisible]);
+    clearDraft, send, retryMessage, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
+    profiles, authNotice, finishSignIn, switchInstance, signOut, request]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

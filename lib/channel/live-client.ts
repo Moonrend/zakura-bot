@@ -24,6 +24,7 @@ export interface ChannelNetworkStatus {
 export interface LiveClientOptions {
   baseUrl: string;
   token: string;
+  getToken?: () => Promise<string>;
   WebSocketImpl?: typeof WebSocket;
   maxBackoffMs?: number;
   /** Time allowed for the socket to open AND receive an authenticated ready. */
@@ -197,9 +198,14 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
 
     socket.onopen = () => {
       if (!current()) return;
-      if (!this.sendFrame({ type: "hello", protocol: PROTOCOL_VERSION, token: this.opts.token.trim(), client: CLIENT_INFO })) {
-        this.failSocket("Could not send the channel handshake.");
-      }
+      const hello = (token: string) => {
+        if (!current()) return;
+        if (!this.sendFrame({ type: "hello", protocol: PROTOCOL_VERSION, token: token.trim(), client: CLIENT_INFO })) this.failSocket("Could not send the channel handshake.");
+      };
+      if (this.opts.getToken) void this.opts.getToken().then(hello).catch((error: unknown) => {
+        if (current()) this.fail(error instanceof Error ? error.message : "Sign in to Zakura again.", false);
+      });
+      else hello(this.opts.token);
     };
     socket.onmessage = (event) => {
       if (!current()) return;

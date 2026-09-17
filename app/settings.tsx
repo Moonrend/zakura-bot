@@ -11,7 +11,7 @@ import { useScreenFocus } from "@/lib/use-screen-focus";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 
 export default function SettingsScreen() {
-  const { settings, settingsReady, updateSettings, connection, transportLabel } = useStore();
+  const { settings, settingsReady, updateSettings, connection, transportLabel, profiles, switchInstance, signOut, authNotice } = useStore();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [baseUrl, setBaseUrl] = useState(settings.zakuraBaseUrl);
@@ -67,6 +67,21 @@ export default function SettingsScreen() {
       <Text className="mb-6 text-[14px] leading-6 text-ink-secondary">
         {settingsReady ? `${transportLabel} channel · ${connection}` : "Loading saved settings…"}
       </Text>
+      <View className="mb-6 gap-3">
+        <Pressable accessibilityRole="button" accessibilityLabel="Add instance" onPress={() => router.push("/login")}
+          className="min-h-11 items-center justify-center rounded-xl bg-accent p-3"><Text className="font-semibold text-app">Sign in / Add instance</Text></Pressable>
+        {profiles.map((profile) => <Pressable key={profile.id} accessibilityRole="button" accessibilityLabel={`Switch to ${profile.label}`}
+          onPress={() => { void switchInstance(profile.id).then(() => { setDirty(false); setError(null); }).catch((cause: Error) => setError(cause.message)); }}
+          className="rounded-xl border border-hairline bg-panel p-3">
+          <Text className="text-ink">{profile.label}{settings.profileId === profile.id && !settings.useMockChannel ? " · Active" : ""}</Text>
+          <Text className="mt-1 text-[12px] text-ink-secondary">{profile.baseUrl}</Text>
+        </Pressable>)}
+        {settings.onboardingComplete ? <Pressable accessibilityRole="button" accessibilityLabel="Sign out" disabled={saving}
+          onPress={() => { setSaving(true); void signOut().then(() => router.replace("/")).catch((cause: Error) => setError(cause.message)).finally(() => setSaving(false)); }}
+          className="min-h-11 items-center justify-center rounded-xl border border-hairline p-3"><Text className="text-danger">Sign out</Text></Pressable> : null}
+        {authNotice ? <Text className="text-danger">{authNotice}</Text> : null}
+      </View>
+      <Text className="mb-3 text-[16px] font-semibold text-ink">Advanced connection</Text>
       <View className="mb-6 flex-row items-center justify-between rounded-2xl border border-hairline bg-panel px-4 py-4">
         <View className="mr-4 min-w-0 flex-1">
           <Text className="text-[15px] font-semibold text-ink">Use mock channel</Text>
@@ -87,7 +102,7 @@ export default function SettingsScreen() {
         accessibilityLabel="Auth token" placeholder="Zakura Bot device token" placeholderTextColor="#a3a3a3"
         className="mb-5 min-h-11 rounded-xl border border-hairline bg-panel px-4 py-3 text-[15px] text-ink" />
       <Text className="mb-6 text-[13px] leading-6 text-ink-secondary">
-        In Zakura, add a Zakura Bot binding to your agent and create a device. Enter that device’s Base URL and token here.
+        Manual fallback: create a device in Zakura’s agent platform page, then enter its token here. Browser login above refreshes credentials automatically.
       </Text>
       {error ? <View className="mb-4 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3" accessibilityRole="alert" accessibilityLiveRegion="polite">
         <Text className="text-[13px] leading-5 text-danger">{error}</Text>
@@ -107,7 +122,7 @@ export default function SettingsScreen() {
         </Pressable>
       </View>
       <Text className="mt-6 text-[12px] leading-5 text-ink-secondary">
-        {Platform.OS === "web" ? "The URL and token are stored in this browser." : "The URL and token are stored locally on this device."} Drafts reset when you reload or switch channels. Live message history is restored from your server on reconnect.
+        {Platform.OS === "web" ? "Credentials stay in this tab’s session storage; closing the tab requires a new login." : "Credentials are protected by SecureStore on this device."} Live message history is restored from Zakura on reconnect.
       </Text>
     </ScrollView>
   );

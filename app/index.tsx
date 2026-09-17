@@ -3,6 +3,7 @@ import { ActivityIndicator, Modal, Platform, View, useWindowDimensions, Pressabl
 import { useFocusEffect } from "expo-router";
 import { AgentSidebar } from "@/components/AgentSidebar";
 import { ChatPane } from "@/components/ChatPane";
+import { SignIn } from "@/components/SignIn";
 import { useStore } from "@/lib/store";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { useScreenFocus } from "@/lib/use-screen-focus";
@@ -10,7 +11,7 @@ import { useScreenFocus } from "@/lib/use-screen-focus";
 export default function HomeScreen() {
   const { width, height } = useWindowDimensions();
   const compact = width < 768;
-  const { sidebarOpen, setSidebarOpen, settingsReady, setThreadVisible } = useStore();
+  const { sidebarOpen, setSidebarOpen, settingsReady, settings, setThreadVisible } = useStore();
   // The desktop sidebar and modal have different lifetimes. Keep the user's
   // filters with the screen so resizing or reopening the drawer retains them.
   const [query, setQuery] = useState("");
@@ -60,6 +61,7 @@ export default function HomeScreen() {
     </View>;
   }
 
+  if (!settings.onboardingComplete) return <SignIn />;
   return (
     <View ref={screenRef} className="flex-1 flex-row bg-app">
       {!compact ? (

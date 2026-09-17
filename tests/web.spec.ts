@@ -5,6 +5,8 @@ const settingsKey = "zakura-bot.settings.v1";
 const agent = (page: Page, name: string) => page.getByRole("button", { name: new RegExp(`^${name}[.,]`) });
 async function mockReady(page: Page) {
   await page.goto("/");
+  const demo = page.getByRole("button", { name: "Try demo", exact: true });
+  if (await demo.isVisible()) await demo.click();
   await expect(page.getByText("Mock channel · connected", { exact: true })).toBeVisible();
 }
 async function noOverflow(page: Page) {

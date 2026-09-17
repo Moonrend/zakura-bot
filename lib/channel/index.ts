@@ -20,10 +20,11 @@ import { MockZakuraChannelClient } from "./mock-client";
 import { LiveZakuraChannelClient } from "./live-client";
 
 /** Pick a transport from persisted settings. */
-export function createChannelClient(settings: AppSettings): ZakuraChannelClient {
+export function createChannelClient(settings: AppSettings, getToken?: () => Promise<string>): ZakuraChannelClient {
   if (settings.useMockChannel) return new MockZakuraChannelClient();
   return new LiveZakuraChannelClient({
     baseUrl: settings.zakuraBaseUrl,
     token: settings.authToken,
+    getToken,
   });
 }
