@@ -31,6 +31,8 @@ Streaming Markdown keeps backticks inside code strings and supports matching bac
 
 Send and Stop use separate controls so a held key or pointer press cannot activate the other action when a turn changes. Enter requires a fresh press before it can send the next draft. Focus returns to the draft when the focused action disappears or Stop enters its waiting state. Long search queries and agent names stay within narrow empty states, and the composer keeps a short placeholder. In short windows, sidebar search scrolls with the conversations so keyboard-focused rows remain visible above Settings. Taller web windows keep search pinned, with room for focused rows when navigating back up the list.
 
+A Stop click that arrives after an idle or terminal channel update keeps the conversation ready for the next message, without creating another wait or false timeout. Pending delivery alone cannot start a Stop request; new live work and busy reconnect snapshots remain stoppable.
+
 On web, losing network connectivity immediately pauses the live channel. Coming online starts a fresh handshake, preserves drafts, and leaves message retries manual. A socket already closing retains its brief wait for an auth/policy close code across network changes, so access failures cannot trigger an automatic reconnect. Both automatic and manual reconnect retain message identities; conflicting replay ids cannot confirm another message or replace a reply, tool or system notice. Received links resolve to absolute HTTP(S) destinations consistently across web and native. Connection setup remains scrollable in short windows; switching to the desktop sidebar closes the mobile drawer.
 
 ## Requirements

@@ -16,6 +16,66 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("a Stop click racing a terminal frame cannot restart the waiting state or discard the next draft", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  let interrupts = 0;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "busy" }] }));
+      if (frame.type === "interrupt") interrupts++;
+    });
+  });
+  await page.addInitScript(({ key }) => {
+    localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false }));
+    const target = window as Window & { zakuraTestSocket?: WebSocket };
+    const NativeSocket = window.WebSocket;
+    window.WebSocket = class extends NativeSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        target.zakuraTestSocket = this;
+      }
+    };
+  }, { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep the next draft after the turn ends");
+  const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+  const send = page.getByRole("button", { name: "Send message", exact: true });
+  for (const terminal of [
+    { type: "typing", agentId: "live", active: false },
+    { type: "agents", agents: [{ id: "live", name: "Live", status: "idle" }] },
+    { type: "error", agentId: "live", turnEnded: true, message: "The run ended with an error" },
+  ]) {
+    channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "busy" }] }));
+    await stop.focus();
+    const clickedWhileMounted = await page.evaluate((frame) => {
+      const socket = (window as Window & { zakuraTestSocket?: WebSocket }).zakuraTestSocket!;
+      const control = document.querySelector<HTMLElement>('[aria-label="Stop generating"]')!;
+      // Deliver the terminal event and click in one task, before React can
+      // replace the old control with Send. The transport has already heard it.
+      socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+      const mounted = control.isConnected;
+      control.click();
+      return mounted;
+    }, terminal);
+    expect(clickedWhileMounted).toBe(true);
+    await expect(send).toBeEnabled();
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue("Keep the next draft after the turn ends");
+    expect(interrupts).toBe(0);
+  }
+  channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: true }));
+  await stop.click();
+  await expect.poll(() => interrupts).toBe(1);
+  await expect(page.getByRole("button", { name: "Stopping reply", exact: true })).toBeVisible();
+  channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: false }));
+  await expect(send).toBeEnabled();
+  await expect(input).toHaveValue("Keep the next draft after the turn ends");
+});
+
 test("reply updates preserve the focused link through reordering and restore transcript focus when its destination disappears", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {

@@ -5,6 +5,64 @@ import { decodeServerFrame } from "../lib/channel/protocol";
 import { chatReducer, emptyChatState, isAgentWorking } from "../lib/chat-state";
 import { agents, liveHarness, networkHarness } from "./helpers";
 
+test("a stale Stop cannot reopen a turn after an idle or terminal channel update", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const terminal of [
+    { type: "agents", agents },
+    { type: "typing", agentId: "a", active: false },
+    { type: "error", agentId: "a", turnEnded: true, message: "Run failed" },
+  ]) {
+    const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+    let state = emptyChatState();
+    client.subscribe((event) => { state = chatReducer(state, event); });
+    t.after(() => client.disconnect());
+    await client.connect(); const socket = sockets[0]; socket.open();
+    socket.frame({ type: "ready", protocol: 1, agents: [{ ...agents[0], status: "busy" }, agents[1]] });
+    state = chatReducer(state, { type: "draft", agentId: "a", text: "Next draft" });
+    socket.frame(terminal);
+    assert.equal(isAgentWorking(state, "a"), false);
+    const count = events.length;
+    // A rendered Stop control can still receive its click before the UI
+    // commits the channel's terminal update. It must not create a new wait.
+    await client.interrupt("a");
+    t.mock.timers.tick(100);
+    assert.equal(events.length, count, terminal.type);
+    assert.equal(socket.sent.some((frame) => frame.type === "interrupt"), false);
+    assert.equal(isAgentWorking(state, "a"), false);
+    assert.equal(state.draftsByAgent.a, "Next draft");
+
+    socket.frame({ type: "typing", agentId: "a", active: true });
+    await client.interrupt("a");
+    assert.equal(socket.sent.filter((frame) => frame.type === "interrupt").length, 1, "new work can still be stopped");
+    assert.equal(state.interrupting.a, true);
+    socket.frame({ type: "typing", agentId: "a", active: false });
+    assert.equal(state.interrupting.a, false);
+    client.disconnect();
+  }
+});
+
+test("Stop while only delivery is pending leaves the receipt deadline intact without inventing a turn", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 200, interruptTimeoutMs: 100 });
+  let state = emptyChatState();
+  client.subscribe((event) => { state = chatReducer(state, event); });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  state = chatReducer(state, { type: "optimistic", message: {
+    id: "pending", agentId: "a", role: "user", kind: "text", text: "Pending delivery", createdAt: 1,
+  } });
+  await client.sendMessage({ agentId: "a", clientMessageId: "pending", text: "Pending delivery", localCreatedAt: 1 });
+  await client.interrupt("a");
+  assert.equal(isAgentWorking(state, "a"), false);
+  assert.equal(socket.sent.some((frame) => frame.type === "interrupt"), false);
+  t.mock.timers.tick(100);
+  assert.equal(state.messagesByAgent.a[0].pending, true);
+  assert.equal(events.some((event) => event.type === "error"), false);
+  t.mock.timers.tick(100);
+  assert.equal(state.messagesByAgent.a[0].failed, true);
+  assert.match(state.errors.at(-1)?.message ?? "", /Delivery was not confirmed/);
+});
+
 test("a ready roster cannot reconnect a socket that entered close grace during its notification", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   for (const trigger of ["error", "offline"] as const) {
@@ -90,6 +148,7 @@ test("a Stop settled or revoked by a progress listener is never written to the s
     t.mock.timers.tick(100);
     assert.equal(events.length, count, "a cancelled Stop cannot leave a deadline behind");
     socket.frame({ type: "agents", agents });
+    socket.frame({ type: "typing", agentId: "a", active: true });
     await client.interrupt("a");
     assert.equal(socket.sent.filter((frame) => frame.type === "interrupt").length, 1, "a fresh Stop still works");
     client.disconnect();
@@ -265,6 +324,7 @@ test("conflicting output ids cannot claim user aliases or start invisible work",
   socket.frame({ type: "chat_reply", agentId: "a", messageId: "reply", createdAt: 3, payload: { text: "Visible reply" } });
   socket.frame({ type: "tool_activity", agentId: "a", message: { id: "reply", agentId: "a", role: "assistant", kind: "activity", createdAt: 3, tool: { name: "search" } } });
   assert.match(JSON.stringify(events.at(-1)), /conflicting ids/);
+  socket.frame({ type: "agents", agents: [{ ...agents[0], status: "busy" }, agents[1]] });
   await client.interrupt("a");
   socket.frame({ type: "agents", agents });
   assert.deepEqual(events.at(-1), { type: "interrupt_pending", agentId: "a", pending: false });
@@ -729,6 +789,7 @@ test("disconnecting inside a ready listener cannot resurrect the connection or i
 test("failed interrupt writes trigger reconnect instead of leaving a falsely connected client", async (t) => {
   const { client, sockets } = liveHarness(); t.after(() => client.disconnect());
   await client.connect(); sockets[0].open(); sockets[0].ready();
+  sockets[0].frame({ type: "typing", agentId: "a", active: true });
   sockets[0].throwOnSend = true;
   await assert.rejects(client.interrupt("a"));
   assert.equal(client.getConnectionState(), "error");
@@ -781,18 +842,20 @@ test("disconnect and roster revocation cancel interrupt timers; explicit turn er
   const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
   t.after(() => client.disconnect());
   await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  socket.frame({ type: "typing", agentId: "a", active: true });
   await client.interrupt("a");
   socket.frame({ type: "agents", agents: [agents[1]] });
   let count = events.length;
   t.mock.timers.tick(100);
   assert.equal(events.length, count);
-  await client.interrupt("b");
   socket.frame({ type: "chat_reply", agentId: "b", messageId: "stream", createdAt: 1, streaming: true, payload: {} });
+  await client.interrupt("b");
   socket.frame({ type: "error", agentId: "b", turnEnded: true, message: "Run failed" });
   count = events.length;
   socket.frame({ type: "message_delta", agentId: "b", messageId: "stream", delta: "late" });
   t.mock.timers.tick(100);
   assert.equal(events.length, count);
+  socket.frame({ type: "typing", agentId: "b", active: true });
   await client.interrupt("b");
   client.disconnect();
   count = events.length;
@@ -855,6 +918,7 @@ test("disconnecting from a Stop progress listener cannot send on a replacement s
   const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
   t.after(() => client.disconnect());
   await client.connect(); sockets[0].open(); sockets[0].ready();
+  sockets[0].frame({ type: "typing", agentId: "a", active: true });
   client.subscribe((event) => {
     if (event.type === "interrupt_pending" && event.pending) client.disconnect();
   });
@@ -1076,6 +1140,7 @@ test("network loss on an already closing socket preserves its authorization clos
       t.after(() => client.disconnect());
       await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
       await client.sendMessage({ agentId: "a", clientMessageId: "pending", text: "Keep the retry body" });
+      socket.frame({ type: "typing", agentId: "b", active: true });
       await client.interrupt("b");
       socket.readyState = readyState;
       // The browser can dispatch offline before error or close, after the
@@ -1131,7 +1196,10 @@ test("send, Stop and heartbeat writes racing socket closure retain authorization
       t.after(() => client.disconnect());
       await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
       await client.sendMessage({ agentId: "a", clientMessageId: "pending", text: "Unconfirmed message" });
-      if (operation !== "interrupt") await client.interrupt("a");
+      if (operation !== "interrupt") {
+        socket.frame({ type: "typing", agentId: "a", active: true });
+        await client.interrupt("a");
+      }
       // The browser can expose CLOSING before delivering the close event.
       socket.readyState = 2;
       if (operation === "send") await assert.rejects(client.sendMessage({ agentId: "b", text: "Write while closing" }));
@@ -1187,6 +1255,7 @@ test("closing sockets preserve authorization codes when channel and request dead
       if (deadline !== "handshake") {
         socket.ready();
         await client.sendMessage({ agentId: "a", clientMessageId: "pending", text: "Keep this message" });
+        socket.frame({ type: "typing", agentId: "b", active: true });
         await client.interrupt("b");
       }
       if (deadline === "pong") t.mock.timers.tick(20);

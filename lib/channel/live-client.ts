@@ -447,6 +447,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   }
 
   private endOutput(agentId: string) {
+    // A terminal event supersedes a busy roster snapshot. Keeping that old
+    // status would let a stale Stop click invent work after the turn ended.
+    if (this.roster.get(agentId) === "busy") this.roster.set(agentId, "idle");
     this.liveTyping.delete(agentId);
     for (const output of [this.replies, this.activities]) {
       for (const item of output.values()) if (item.agentId === agentId) item.active = false;
@@ -616,6 +619,10 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     if (this.state !== "connected") throw new Error("Could not stop the reply. Check the channel connection.");
     this.requireAvailableAgent(agentId);
     const socket = this.socket;
+    // The UI can still have a Stop control mounted while a terminal frame is
+    // being rendered. An idle conversation has nothing to cancel or await.
+    // Closing sockets must still take the normal close-code preservation path.
+    if (socket?.readyState === 1 && this.roster.get(agentId) !== "busy" && !this.hasLiveWork(agentId)) return;
     if (this.interrupts.get(agentId)?.timer) return;
     const pending = { timer: null as Timer | null };
     pending.timer = setTimeout(() => {
