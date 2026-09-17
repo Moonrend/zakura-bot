@@ -74,6 +74,14 @@ jobs:
           node -v
           df -h
 
+      # Critical: assembleDebug skips embedding the JS bundle, so a sideloaded APK
+      # waits for Metro forever and stays on the Expo splash. Always ship a release
+      # build (debug-signed when no upload keystore) so index.android.bundle is inside.
+      - name: Force release signing + embed JS
+        run: |
+          set -euo pipefail
+          python3 scripts/patch-android-ci-gradle.py
+
       - name: Assemble APK
         working-directory: android
         env:
@@ -83,9 +91,10 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          GRADLE_ARGS=(assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon --stacktrace)
+          # Always assembleRelease so Metro is not required on device.
+          GRADLE_ARGS=(assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --stacktrace)
           if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-            echo "Release signing secrets present — assembling release APK."
+            echo "Release signing secrets present — configuring upload keystore."
             mkdir -p keystores
             echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystores/release.keystore
             {
@@ -94,30 +103,32 @@ jobs:
               echo "MYAPP_UPLOAD_STORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD}"
               echo "MYAPP_UPLOAD_KEY_PASSWORD=${ANDROID_KEY_PASSWORD}"
             } >> gradle.properties
-            if grep -q 'MYAPP_UPLOAD_STORE_FILE' app/build.gradle 2>/dev/null || \
-               grep -q 'signingConfigs' app/build.gradle 2>/dev/null; then
-              GRADLE_ARGS=(assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --stacktrace)
-            else
-              echo "::warning::Release keystore provided but app/build.gradle may not reference MYAPP_* props yet. Falling back to assembleDebug (debug-signed)."
-            fi
           else
-            echo "No ANDROID_KEYSTORE_* secrets — building debug-signed APK (OK for internal testing)."
+            echo "No ANDROID_KEYSTORE_* secrets — release APK will use debug signing (OK for internal testing)."
           fi
           ./gradlew "${GRADLE_ARGS[@]}"
 
-      - name: Locate APK
+      - name: Locate APK and verify JS bundle
         id: apk
         run: |
           set -euo pipefail
-          APK=$(find android -name "*.apk" -type f | head -n 1)
+          APK=$(find android -name "*.apk" -type f ! -name "*unaligned*" | head -n 1)
           if [ -z "$APK" ]; then
             echo "::error::No APK found under android/"
             find android -type f -name "*.apk" -o -name "*.aab" || true
             exit 1
           fi
-          echo "path=$APK" >> "$GITHUB_OUTPUT"
           echo "Found APK: $APK"
           ls -lh "$APK"
+          # Fail the job if the JS bundle is missing (would hang on Expo splash).
+          if ! unzip -l "$APK" | grep -Eiq 'index\.android\.bundle|android\.bundle|\.hbc'; then
+            echo "::error::APK has no embedded JS bundle — device would stick on splash without Metro."
+            unzip -l "$APK" | head -80
+            exit 1
+          fi
+          echo "JS bundle present in APK."
+          unzip -l "$APK" | grep -Ei 'index\.android\.bundle|android\.bundle|\.hbc|splash' || true
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
