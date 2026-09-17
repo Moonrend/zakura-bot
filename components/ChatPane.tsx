@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
-import { ArrowDown, Menu, MessageCircle, Settings } from "lucide-react-native";
+import { ArrowDown, Menu, MessageCircle, Settings, Info } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
@@ -260,6 +260,8 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
           <Text className="text-[15px] font-semibold text-ink" numberOfLines={1} accessibilityRole="header">{agent?.name ?? "Zakura Bot"}</Text>
           <Text className="mt-1 text-[11px] text-ink-secondary" numberOfLines={1}>{statusText}</Text>
         </View>
+        {agent ? <Pressable onPress={() => router.push("/bots")} accessibilityRole="button" accessibilityLabel="Bot details"
+          className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"><Info size={20} color="#fcfcfc" /></Pressable> : null}
       </View>
 
       <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner onFocusLost={focusTranscript}

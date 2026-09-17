@@ -178,10 +178,21 @@ function roster(value: unknown): Agent[] {
     requireValid(oneOf(item.status, ["idle", "busy", "offline"]));
     requireValid(optionalString(item.title) && optionalString(item.preview) && optionalBool(item.unread));
     requireValid(item.color === undefined || (typeof item.color === "string" && /^#[\da-f]{6}$/i.test(item.color)));
+    requireValid(item.bindingId === undefined || id(item.bindingId));
+    requireValid(optionalString(item.description));
+    let capabilities: Agent["capabilities"];
+    if (item.capabilities !== undefined) {
+      requireValid(record(item.capabilities) && typeof item.capabilities.files === "boolean" &&
+        typeof item.capabilities.desktop === "boolean" && typeof item.capabilities.interactions === "boolean");
+      capabilities = { files: item.capabilities.files, desktop: item.capabilities.desktop, interactions: item.capabilities.interactions };
+    }
     return {
       id: item.id, name: item.name, title: item.title, preview: item.preview,
       status: item.status as Agent["status"], color: (item.color as string | undefined) ?? "#1084fe",
       unread: item.unread ?? false,
+      ...(item.bindingId ? { bindingId: item.bindingId } : {}),
+      ...(item.description ? { description: item.description } : {}),
+      ...(capabilities ? { capabilities } : {}),
     };
   });
 }

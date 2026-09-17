@@ -77,7 +77,7 @@ export default function SettingsScreen() {
           <Text className="mt-1 text-[12px] text-ink-secondary">{profile.baseUrl}</Text>
         </Pressable>)}
         {settings.onboardingComplete ? <Pressable accessibilityRole="button" accessibilityLabel="Sign out" disabled={saving}
-          onPress={() => { setSaving(true); void signOut().then(() => router.replace("/")).catch((cause: Error) => setError(cause.message)).finally(() => setSaving(false)); }}
+          onPress={() => { setSaving(true); void signOut().then(() => router.dismissTo("/")).catch((cause: Error) => setError(cause.message)).finally(() => setSaving(false)); }}
           className="min-h-11 items-center justify-center rounded-xl border border-hairline p-3"><Text className="text-danger">Sign out</Text></Pressable> : null}
         {authNotice ? <Text className="text-danger">{authNotice}</Text> : null}
       </View>

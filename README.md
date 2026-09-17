@@ -7,7 +7,7 @@ A cross-platform Zakura client for iOS, Android and web. Connect your own instan
 | Product capability | Progress |
 | --- | --- |
 | Zakura login | **Implemented**: browser device authorization, tenant binding consent, rotating refresh credentials, native SecureStore, logout and multiple instances |
-| Bot / Agent management | Next: binding-aware profiles and session controls; authorized WS roster already works |
+| Bot / Agent management | **Implemented**: authorized roster, binding/profile details, selection, start/stop and fresh sessions |
 | Sidebar groups | Planned: locally persisted sections and ordering |
 | Send files | Planned: image/file picker, uploads and attachment cards |
 | View desktop | Planned: latest workspace screenshot and refresh |
@@ -26,6 +26,8 @@ The matching server changes are in [Zakura PR #15](https://github.com/Moonrend/Z
 Access credentials refresh every 30 minutes without changing the device or its history. Refresh credentials expire after 90 days. Native credentials live in SecureStore; web credentials live in the current tab’s sessionStorage, so closing the tab requires a new login. Ordinary preferences contain only instance metadata. Older plaintext settings are migrated and erased on load.
 
 **Advanced connection** retains manual device tokens for existing installations. **Try demo** opens local mock conversations without an account. The URL must be reachable from the phone/browser; use HTTPS for a public instance and retain any reverse-proxy path prefix.
+
+Open **Manage bots** in the sidebar or **Bot details** in a conversation. Select an authorized bot, start its session, stop a running turn, or choose **New session** for fresh model context. The transcript keeps earlier messages. Bots and platform bindings are created in Zakura; **Authorize bots** opens another device authorization to choose bindings.
 
 ## Requirements
 

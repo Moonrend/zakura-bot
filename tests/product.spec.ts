@@ -1,5 +1,35 @@
 import { expect, test } from "@playwright/test";
 
+test("bot manager shows binding details and starts, stops and resets a server session", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("zakura-bot.settings.v1", JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-token", useMockChannel: false,
+  })));
+  const actions: string[] = [];
+  await page.route("**/api/zakurabot/sessions/bot", (route) => {
+    const action = route.request().method() === "POST" ? route.request().postDataJSON().action : "status";
+    actions.push(action);
+    return route.fulfill({ json: { session: { agentId: "bot", bindingId: "binding-123", sessionId: "session", status: action === "status" ? "not_started" : "ready" } } });
+  });
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => socket.onMessage((raw) => {
+    if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [
+      { id: "bot", name: "Research", title: "Briefs", description: "Your research assistant", bindingId: "binding-123", status: "idle" },
+    ] }));
+  }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Manage bots", exact: true }).click();
+  await expect(page.getByText("Your research assistant", { exact: true })).toBeVisible();
+  await expect(page.getByText("Binding: binding-123", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Start session", exact: true }).click();
+  await expect(page.getByText("Session: ready", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Stop session", exact: true }).click();
+  await expect(page.getByText("The current run has stopped. You can send a message to continue.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await expect(page.getByText("New session ready. The bot starts with a fresh context.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Open bot conversation", exact: true }).click();
+  await expect(page.getByText("New session started. Your bot now has a fresh context.", { exact: true })).toBeVisible();
+  expect(actions).toEqual(["status", "start", "stop", "new"]);
+});
+
 test("first launch authorizes in Zakura, persists only metadata locally, switches instances and signs out", async ({ page, context }) => {
   let identity = 0;
   const revoked: string[] = [];

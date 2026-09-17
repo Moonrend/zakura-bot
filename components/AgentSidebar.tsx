@@ -67,8 +67,8 @@ export function AgentSidebar({ query, setQuery, unreadOnly, setUnreadOnly }: {
             <Text className="text-[11px] text-ink-secondary" numberOfLines={1}>{connectionLabel}</Text>
           </View>
         </View>
-        <Pressable disabled className="h-11 w-11 items-center justify-center rounded-xl opacity-40"
-          accessibilityRole="button" accessibilityLabel="Adding agents is not available yet" accessibilityState={{ disabled: true }}>
+        <Pressable onPress={() => { setSidebarOpen(false); router.push("/bots"); }} className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
+          accessibilityRole="button" accessibilityLabel="Manage bots">
           <Plus size={20} color="#b8b8b8" />
         </Pressable>
         {compact ? (

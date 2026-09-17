@@ -10,7 +10,7 @@ import { chatReducer, emptyChatState, isAgentWorking, previewFromMessages, type 
 import { loadSettings, saveSettings, loadProfiles, saveProfile, readCredentials, writeCredentials, removeProfile } from "./settings";
 import { CredentialSession, credentialsFromToken, instanceUrl, refreshAuthorization, revokeAuthorization, zakuraRequest,
   type InstanceProfile, type TokenResponse } from "./auth";
-import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage } from "./types";
+import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type BotSession } from "./types";
 
 export type { ChannelError } from "./chat-state";
 
@@ -29,6 +29,8 @@ type StoreValue = {
   switchInstance: (id: string) => Promise<void>;
   signOut: () => Promise<void>;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
+  sessions: Record<string, BotSession>;
+  sessionAction: (agentId: string, action: "status" | "start" | "stop" | "new") => Promise<BotSession>;
   connection: ChannelConnectionState;
   connectionDetail?: string;
   transportLabel: string;
@@ -87,6 +89,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [settingsReady, setSettingsReady] = useState(false);
   const [profiles, setProfiles] = useState<InstanceProfile[]>([]);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<Record<string, BotSession>>({});
   const tokenProviderRef = useRef<(() => Promise<string>) | null>(null);
   const [transportLabel, setTransportLabel] = useState("Mock");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -127,6 +130,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const agents = nextSettings.useMockChannel ? DEMO_AGENTS.map((agent) => ({ ...agent,
         preview: previewFromMessages(messages[agent.id] ?? []) ?? agent.preview })) : [];
       dispatch({ type: "reset", agents, messages });
+      setSessions({});
       scopeRef.current = scope;
     }
     let session: Promise<CredentialSession> | undefined;
@@ -354,18 +358,40 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return zakuraRequest<T>(current.zakuraBaseUrl, path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${token}` } });
   }, []);
 
+  const sessionAction = useCallback(async (agentId: string, action: "status" | "start" | "stop" | "new") => {
+    const scope = channelScope(settingsRef.current);
+    if (!stateRef.current.agents.some((agent) => agent.id === agentId)) throw new Error("This bot is no longer authorized.");
+    let session: BotSession;
+    if (settingsRef.current.useMockChannel) {
+      if (action === "stop" || action === "new") await clientRef.current?.interrupt?.(agentId);
+      session = { agentId, bindingId: `demo-${agentId}`, sessionId: `demo-session-${agentId}`, status: "ready" };
+    } else {
+      const path = `/api/zakurabot/sessions/${encodeURIComponent(agentId)}`;
+      const result = await request<{ session: BotSession }>(path, action === "status" ? {} : {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }),
+      });
+      session = result.session;
+    }
+    if (scope !== channelScope(settingsRef.current)) throw new Error("The active instance changed.");
+    setSessions((previous) => ({ ...previous, [agentId]: session }));
+    if (action === "stop" || action === "new") dispatch({ type: "typing", agentId, active: false });
+    if (action === "new") dispatch({ type: "message", message: { id: uid("session"), agentId, kind: "system", role: "system",
+      text: "New session started. Your bot now has a fresh context.", createdAt: Date.now() } });
+    return session;
+  }, [request, dispatch]);
+
   const value = useMemo<StoreValue>(() => ({
     agents: state.agents, selectedId: state.selectedId, messagesByAgent: state.messagesByAgent,
     draftsByAgent: state.draftsByAgent,
     typing: Object.fromEntries(state.agents.map((agent) => [agent.id, isAgentWorking(state, agent.id)])),
     interrupting: state.interrupting, connection: state.connection,
     connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
-    profiles, authNotice, finishSignIn, switchInstance, signOut, request,
+    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction,
     sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, interrupt, reconnect,
     dismissError, updateSettings, setSidebarOpen, setThreadVisible,
   }), [state, settings, settingsReady, transportLabel, lastError, sidebarOpen, selectAgent, setDraft,
     clearDraft, send, retryMessage, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
-    profiles, authNotice, finishSignIn, switchInstance, signOut, request]);
+    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

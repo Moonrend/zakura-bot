@@ -29,7 +29,7 @@ export function SignIn() {
         const tokens = await pollAuthorization(grant.baseUrl, grant.data.device_code, controller.signal);
         if (controller.signal.aborted) return;
         await finishSignIn(grant.baseUrl, tokens);
-        if (!controller.signal.aborted) { setGrant(null); router.replace("/"); }
+        if (!controller.signal.aborted) { setGrant(null); router.dismissTo("/"); }
         return;
       } catch (cause) {
         if (controller.signal.aborted) return;
@@ -66,7 +66,7 @@ export function SignIn() {
     } finally { setBusy(false); }
   }
   async function choose(id: string) {
-    try { await switchInstance(id); router.replace("/"); }
+    try { await switchInstance(id); router.dismissTo("/"); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Sign in again."); }
   }
   return <ScrollView className="flex-1 bg-app" keyboardShouldPersistTaps="handled"
@@ -104,7 +104,7 @@ export function SignIn() {
       </Pressable>)}
     </View> : null}
     <Pressable accessibilityRole="button" accessibilityLabel="Try demo" className="mt-6 min-h-11 items-center justify-center"
-      onPress={() => { void updateSettings({ useMockChannel: true, onboardingComplete: true }).then(() => router.replace("/")).catch((cause: Error) => setError(cause.message)); }}>
+      onPress={() => { void updateSettings({ useMockChannel: true, onboardingComplete: true }).then(() => router.dismissTo("/")).catch((cause: Error) => setError(cause.message)); }}>
       <Text className="text-[14px] text-ink-secondary">Try demo</Text>
     </Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel="Advanced connection settings" className="min-h-11 items-center justify-center" onPress={() => router.push("/settings")}>
