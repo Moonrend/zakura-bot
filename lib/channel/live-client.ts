@@ -33,7 +33,7 @@ export interface LiveClientOptions {
   pongTimeoutMs?: number;
   /** Time to wait for a correlated user echo after a socket write. */
   acknowledgementTimeoutMs?: number;
-  /** Wait for typing:false or a refusal before making Stop available again. */
+  /** Wait for turn completion, an idle roster without live work, or a refusal. */
   interruptTimeoutMs?: number;
   /** Defaults to browser online/offline events; native clients use socket liveness. */
   network?: ChannelNetworkStatus;
@@ -95,6 +95,7 @@ type Timer = ReturnType<typeof setTimeout>;
 const key = (agentId: string, messageId: string) => JSON.stringify([agentId, messageId]);
 type PendingWrite = { agentId: string; text: string; timer: Timer };
 type SentMessage = { agentId: string; text: string; echo?: ChatMessage };
+type PendingInterrupt = { timer: Timer | null };
 
 export class LiveZakuraChannelClient implements ZakuraChannelClient {
   readonly label = "Live WS";
@@ -113,11 +114,12 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   // reopen a finished reply. A reconnect starts a fresh snapshot/stream scope.
   private replies = new Map<string, { agentId: string; active: boolean }>();
   private activities = new Map<string, { agentId: string; active: boolean }>();
+  private liveTyping = new Set<string>();
   private acknowledgements = new Map<string, PendingWrite>();
   // Keep idempotency content through retries and reconnects, until access is removed.
   private sentMessages = new Map<string, SentMessage>();
   // At most one outstanding stop request per agent.
-  private interrupts = new Map<string, { timer: Timer | null }>();
+  private interrupts = new Map<string, PendingInterrupt>();
   private network: ChannelNetworkStatus | undefined;
   private unsubscribeNetwork: (() => void) | null = null;
 
@@ -341,7 +343,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
         break;
       case "typing":
         if (frame.active && this.roster.get(frame.agentId) === "offline") return;
-        if (!frame.active) {
+        if (frame.active) this.liveTyping.add(frame.agentId);
+        else {
           this.endOutput(frame.agentId);
           this.finishInterrupt(frame.agentId);
           if (this.socket !== socket || this.closedByUser) return;
@@ -360,7 +363,11 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   }
 
   private updateRoster(agents: Agent[]) {
+    const socket = this.socket;
     this.roster = new Map(agents.map((agent) => [agent.id, agent.status]));
+    for (const agentId of this.liveTyping) {
+      if (!this.roster.has(agentId) || this.roster.get(agentId) === "offline") this.liveTyping.delete(agentId);
+    }
     for (const output of [this.replies, this.activities]) {
       for (const [messageKey, item] of output) {
         if (!this.roster.has(item.agentId)) output.delete(messageKey);
@@ -376,13 +383,34 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     for (const [messageKey, sent] of this.sentMessages) {
       if (!this.roster.has(sent.agentId)) this.sentMessages.delete(messageKey);
     }
-    for (const agentId of this.interrupts.keys()) {
+    const confirmedStops: [string, PendingInterrupt][] = [];
+    for (const [agentId, pending] of this.interrupts) {
       if (!this.roster.has(agentId) || this.roster.get(agentId) === "offline") this.finishInterrupt(agentId, false);
+      // A turn may end between the ready snapshot and the server's live
+      // subscription. Its next idle roster is sufficient confirmation unless
+      // this socket has observed explicit work that still needs a terminal event.
+      else if (this.roster.get(agentId) === "idle" && !this.hasLiveWork(agentId)) confirmedStops.push([agentId, pending]);
     }
     this.emitter.emit({ type: "agents", agents });
+    if (this.socket !== socket || this.closedByUser) return;
+    for (const [agentId, pending] of confirmedStops) {
+      if (this.interrupts.get(agentId) === pending && this.roster.get(agentId) === "idle" && !this.hasLiveWork(agentId)) {
+        this.finishInterrupt(agentId);
+        if (this.socket !== socket || this.closedByUser) return;
+      }
+    }
+  }
+
+  private hasLiveWork(agentId: string): boolean {
+    if (this.liveTyping.has(agentId)) return true;
+    for (const output of [this.replies, this.activities]) {
+      for (const item of output.values()) if (item.agentId === agentId && item.active) return true;
+    }
+    return false;
   }
 
   private endOutput(agentId: string) {
+    this.liveTyping.delete(agentId);
     for (const output of [this.replies, this.activities]) {
       for (const item of output.values()) if (item.agentId === agentId) item.active = false;
     }
@@ -425,6 +453,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.acknowledgements.clear();
     this.replies.clear();
     this.activities.clear();
+    this.liveTyping.clear();
     for (const pending of this.interrupts.values()) if (pending.timer) clearTimeout(pending.timer);
     this.interrupts.clear();
     this.roster.clear();

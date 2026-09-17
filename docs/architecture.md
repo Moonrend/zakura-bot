@@ -116,6 +116,7 @@ Live client rules:
 - `message_done` finishes one reply. Only a turn-ending signal finishes the whole turn, which may contain several `chat_reply` calls. Completed/stopped tools cannot be reopened by replayed start events.
 - Roster updates contain the complete authorized list. Removal drops the conversation, draft, pending requests and local read marker. Offline status settles output and pending writes. Explicit live typing survives an ordinary roster refresh; an idle roster can clear a busy handshake snapshot when no live turn was observed.
 - Drop unknown event types; reject malformed / non-http attachment URLs.
+- Omit visually empty card decoration without dropping the post's usable text, attachments or actions. Card fields are still validated, and a wholly blank reply is rejected.
 - Reconnect with backoff; treat close codes `1008` / `4401` / `4403` as auth/access failures (no retry).
 - Check the `ready` protocol version before decoding its roster. An unsupported version is terminal even if it uses a different roster schema.
 - Heartbeats send `ping` every 25 seconds and require `pong` within 10 seconds. Stale callbacks and request timers cannot act on replacement sockets.
@@ -133,7 +134,7 @@ Unconfirmed writes become manually retryable after 15 seconds or disconnect; rec
 
 Message upserts retain optimistic ids and resolve `reply_to` through server/client aliases within the same conversation. Missing quote targets show “Reply to earlier message”. An in-memory read watermark keeps older backfill from making an already-read conversation unread, while new tokens in a known stream still mark it unread after the user leaves. No persistent client history, replay cursor, read receipts or turn ids are implemented.
 
-Interrupt is one outstanding request per agent. The UI shows “Stopping reply” until `typing: false`, refusal, or a 15-second timeout. The current v1 gateway sends uncorrelated agent errors for interrupt refusals; while an interrupt is outstanding (including a late refusal after timeout), the client treats an omitted `turnEnded` as false. Explicit `turnEnded: true` remains terminal. Timeout/refusal restores Stop and preserves output and drafts. Removing an agent, going offline or disconnecting clears its interrupt timer.
+Interrupt is one outstanding request per agent. The UI shows “Stopping reply” until `typing: false`, refusal, or a 15-second timeout. An idle roster also confirms Stop when no explicit typing, stream or running tool is active on the current socket: a turn can finish between the busy `ready` snapshot and the live subscription. Roster confirmation clears the request timer and preserves the next draft. The current v1 gateway sends uncorrelated agent errors for interrupt refusals; the client treats an omitted `turnEnded` as false. Explicit `turnEnded: true` remains terminal. Timeout/refusal restores Stop and preserves output and drafts. Removing an agent, going offline or disconnecting clears its interrupt timer.
 
 Received workspace attachments are signed HTTP(S) download links (currently valid for 60 minutes; up to 8 files, 16 MB each on the reference server). The app displays links, including card images. Uploads remain unavailable: file drag/drop and file-only paste are blocked with an inline explanation so a browser drop cannot replace the page and discard drafts.
 

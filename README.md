@@ -19,7 +19,7 @@ Talks to [Zakura](https://github.com/Moonrend/Zakura) as a messaging channel —
 - **`ZakuraChannelClient`**: mock (default) + **live WebSocket** client with stable retries and history upserts
 - Accessibility labels / live regions on primary controls
 
-Sending from the composer brings the transcript back to the latest messages; incoming replies preserve your position while reading history. Unsupported file drops cannot navigate away from any app route. Mixed image/text paste keeps the text and explains that the image was not uploaded.
+Sending from the composer brings the transcript back to the latest messages; incoming replies preserve your position while reading history. Jump to latest keeps keyboard focus in the transcript. Raw and Markdown streams show a cursor beside the arriving text. Unsupported file drops cannot navigate away from any app route. Mixed image/text paste keeps the text and explains that the image was not uploaded.
 
 On web, losing network connectivity immediately pauses the live channel. Coming online starts a fresh handshake, preserves drafts, and leaves message retries manual. Connection setup remains scrollable in short windows; switching to the desktop sidebar closes the mobile drawer.
 
@@ -167,12 +167,13 @@ See **[docs/architecture.md](./docs/architecture.md)**. Zakura binds a **`Remote
 
 The v1 client also enforces these boundaries in `lib/channel/protocol.ts` and `live-client.ts`:
 
-- `ready` and `agents` carry complete rosters. Events for removed agents are ignored; removal/offline status clears pending requests and active output. An ordinary roster refresh preserves explicit live work; an idle snapshot can recover a stale busy handshake state.
+- `ready` and `agents` carry complete rosters. Events for removed agents are ignored; removal/offline status clears pending requests and active output. An ordinary roster refresh preserves explicit live work; an idle snapshot can recover a stale busy handshake state and confirm its outstanding Stop request.
 - A streaming `chat_reply` announces an id once per connection. Repeated announcements cannot erase tokens or reopen a finished reply. `message_done` finishes one reply; `typing: false` ends the turn, which may contain several replies. A non-streaming `chat_reply` is a complete snapshot and may include `interrupted: true` for stopped output.
 - User echoes carry the original `clientMessageId`, even when the server assigns its own message id. Retry uses the same key and text; an accepted duplicate can receive only its stored echo. Pending delivery is separate from an active turn. The client never automatically resends on reconnect; an unconfirmed write is available for manual retry.
 - Send rejections include `agentId` and `clientMessageId`. An old rejection after acknowledgement cannot fail an accepted message. A delivery timeout or rejection preserves active work, including the interval before its first visible output. Interrupt requests have progress, timeout and duplicate-click protection. All v1 errors without `turnEnded` preserve ongoing output, even a delayed refusal arriving during the next turn; newer adapters must explicitly set `turnEnded: true` for terminal errors. v1 lacks operation ids, so a delayed refusal can release a newer Stop request's progress indicator, but cannot terminate its reply.
 - The 1 MB frame limit counts UTF-8 bytes, including CJK and emoji. After a browser socket error, previous handshake/heartbeat deadlines are cleared before waiting up to one second for the close code, preserving terminal authentication failures instead of retrying them.
 - The adapter must resolve workspace attachments to HTTP(S) URLs and set `reply_to` to the actual quoted platform message id, including the `RemoteChannelSessionHandle.inboundMessageId` default. Quotes resolve only inside the current conversation; missing history shows “Reply to earlier message”.
+- Blank card decoration is omitted when the same `chat_reply` contains usable text, attachments or actions. Wholly blank replies, malformed fields and unsafe URLs are still rejected.
 
 Reconnect requires a fresh authenticated `ready`. The reference server then replays the latest 100 persisted messages per authorized conversation; repeated ids upsert, and older backfill does not re-mark a read conversation. The current server sends complete reply snapshots; optional streaming support is also covered by browser tests. Client-side persistent history/drafts, replay cursors and turn ids remain unimplemented.
 

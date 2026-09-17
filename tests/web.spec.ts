@@ -233,7 +233,10 @@ test("reading older messages ignores incoming replies, while sending returns to 
   channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "new", createdAt: 50, payload: { text: "A new message arrived" } }));
   await expect(page.getByTestId("message-new")).toHaveCount(1);
   expect(await transcript.evaluate((element) => element.scrollTop)).toBe(previous);
-  await page.getByRole("button", { name: "Jump to latest", exact: true }).click();
+  const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
+  await jump.focus();
+  await jump.press("Enter");
+  await expect(transcript).toBeFocused();
   await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(80);
   await transcript.hover();
   await page.mouse.wheel(0, -700);
@@ -632,4 +635,55 @@ test("empty channel recovery remains keyboard accessible in a short narrow windo
   await accessible(page);
   await settings.click();
   await expect(page.getByLabel("Auth token", { exact: true })).toHaveValue("test-channel-token");
+});
+
+test("an idle roster releases a Stop requested from a reconnect snapshot and keeps the draft", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "busy" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Next message after reconnect");
+  await page.getByRole("button", { name: "Stop generating", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stopping reply", exact: true })).toBeDisabled();
+  channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "idle" }] }));
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  await expect(input).toHaveValue("Next message after reconnect");
+  await expect(agent(page, "Live")).toHaveAttribute("aria-label", /Available/);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("raw streaming replies retain a visible cursor and blank card decoration does not discard text", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "raw-stream", createdAt: 1, streaming: true,
+        payload: { format: "raw", text: "**literal**" } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const reply = page.getByTestId("message-raw-stream");
+  await expect(reply).toContainText("**literal**");
+  await expect(reply.getByText("▍", { exact: true })).toBeVisible();
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "raw-stream", delta: " continues" }));
+  channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "raw-stream" }));
+  await expect(reply).toContainText("**literal** continues");
+  await expect(reply.getByText("▍", { exact: true })).toHaveCount(0);
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "decorated", createdAt: 2,
+    payload: { text: "Visible despite blank card fields", kind: "card", card: { fields: [{ label: "", value: " " }] } } }));
+  await expect(page.getByTestId("message-decorated")).toContainText("Visible despite blank card fields");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.setViewportSize({ width: 320, height: 700 });
+  await noOverflow(page);
+  await accessible(page);
 });

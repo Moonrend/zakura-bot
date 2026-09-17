@@ -131,7 +131,15 @@ export function ChatPane() {
               <TypingDots reducedMotion={reducedMotion} /><Text className="text-[12px] text-ink-secondary">{agent.name} is working…</Text>
             </View> : null}
           </ScrollView>
-          {!pinned ? <Pressable onPress={() => pinToLatest(true)}
+          {!pinned ? <Pressable onPress={() => {
+            pinToLatest(true);
+            // The button disappears after activation. Keep keyboard navigation
+            // in the transcript instead of letting focus fall back to the page.
+            if (Platform.OS === "web") {
+              const node = scrollRef.current?.getScrollableNode() as HTMLElement | null | undefined;
+              node?.focus({ preventScroll: true });
+            }
+          }}
             accessibilityRole="button" accessibilityLabel="Jump to latest"
             className="absolute bottom-3 right-4 h-11 w-11 items-center justify-center rounded-full border border-hairline bg-raised active:bg-raised-hover">
             <ArrowDown size={19} color="#fcfcfc" />

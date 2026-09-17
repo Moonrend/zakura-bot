@@ -549,3 +549,71 @@ test("the frame limit counts UTF-8 bytes, including CJK and surrogate pairs", ()
     assert.throws(() => decodeServerFrame(raw));
   }
 });
+
+test("empty card decoration cannot hide a usable chat_reply", () => {
+  const frame = { type: "chat_reply", agentId: "a", messageId: "reply", createdAt: 1 };
+  // RemoteChannelSessionHandle cards may contain only blank fields or rows.
+  for (const decoration of [{}, { title: " \n " }, { fields: [{ label: "", value: " " }] }, { table: { headers: [], rows: [[]] } }]) {
+    for (const content of [{ text: "A visible reply" }, { attachments: [{ url: "https://example.com/report.pdf" }] }]) {
+      const decoded = decodeServerFrame(JSON.stringify({ ...frame, payload: { ...content, kind: "card", card: decoration } }));
+      assert.equal(decoded?.type, "chat_reply");
+      if (decoded?.type === "chat_reply") {
+        assert.equal(decoded.message.card, undefined);
+        assert.ok(decoded.message.text || decoded.message.attachments?.length);
+      }
+    }
+    assert.throws(() => decodeServerFrame(JSON.stringify({ ...frame, payload: { card: decoration } })), "a wholly blank reply is still invalid");
+  }
+  for (const card of [null, [], { fields: [{ label: 1, value: "" }] }, { imageUrl: "file:///secret" }]) {
+    assert.throws(() => decodeServerFrame(JSON.stringify({ ...frame, payload: { text: "Visible", card } })));
+  }
+  assert.throws(() => decodeServerFrame(JSON.stringify({ ...frame, payload: { text: "Visible", kind: "card" } })));
+});
+
+test("an idle roster confirms Stop after a busy handshake snapshot without a false timeout", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  sockets[0].frame({ type: "typing", agentId: "a", active: true });
+  sockets[0].remoteClose(1006);
+  t.mock.timers.tick(1000);
+  const socket = sockets[1]; socket.open();
+  socket.frame({ type: "ready", protocol: 1, agents: agents.map((agent) => ({ ...agent, status: "busy" })) });
+  await client.interrupt("a");
+  // The turn ended between the ready snapshot and the new socket subscription.
+  socket.frame({ type: "agents", agents });
+  assert.deepEqual(events.filter((event) => event.type === "interrupt_pending"), [
+    { type: "interrupt_pending", agentId: "a", pending: true },
+    { type: "interrupt_pending", agentId: "a", pending: false },
+  ]);
+  t.mock.timers.tick(100);
+  assert.equal(events.some((event) => event.type === "error"), false);
+  socket.frame({ type: "typing", agentId: "a", active: true });
+  await client.interrupt("a");
+  assert.equal(socket.sent.filter((frame) => frame.type === "interrupt").length, 2);
+});
+
+test("idle rosters cannot confirm Stop over explicit live typing, streams or tools", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const signals = [
+    { type: "typing", agentId: "a", active: true },
+    { type: "chat_reply", agentId: "a", messageId: "stream", createdAt: 1, streaming: true, payload: {} },
+    { type: "tool_activity", agentId: "a", message: { id: "tool", agentId: "a", role: "assistant", kind: "activity", createdAt: 1, tool: { name: "chat_reply" } } },
+  ];
+  for (const signal of signals) {
+    const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+    t.after(() => client.disconnect());
+    await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+    socket.frame(signal);
+    await client.interrupt("a");
+    socket.frame({ type: "agents", agents });
+    await client.interrupt("a");
+    assert.equal(socket.sent.filter((frame) => frame.type === "interrupt").length, 1, signal.type);
+    assert.equal(events.filter((event) => event.type === "interrupt_pending").length, 1, signal.type);
+    socket.frame({ type: "typing", agentId: "a", active: false });
+    t.mock.timers.tick(100);
+    assert.equal(events.some((event) => event.type === "error"), false, signal.type);
+    client.disconnect();
+  }
+});

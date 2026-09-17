@@ -20,7 +20,7 @@ export type ChannelEvent =
   | { type: "message_done"; agentId: string; messageId: string; interrupted?: boolean }
   | { type: "tool_activity"; agentId: string; message: ChatMessage }
   | { type: "typing"; agentId: string; active: boolean }
-  /** Local request state; v1 acknowledges interrupt by ending typing or an error. */
+  /** Local request state; cleared by turn completion, roster recovery or refusal. */
   | { type: "interrupt_pending"; agentId: string; pending: boolean }
   | { type: "error"; message: string; agentId?: string; clientMessageId?: string;
       /** Only true explicitly ends a turn. v1 wire errors normalize to false. */

@@ -3,7 +3,9 @@ import { ExternalLink } from "./ExternalLink";
 
 /** Small, selectable Markdown subset. HTML is always displayed as text. */
 export function RichText({ text, streaming, raw = false }: { text: string; streaming?: boolean; raw?: boolean }) {
-  if (raw) return <Text testID="message-text" className="text-[15px] leading-[22px] text-ink" selectable>{text}</Text>;
+  if (raw) return <Text testID="message-text" className="text-[15px] leading-[22px] text-ink" selectable>
+    {text}{streaming ? <StreamingCursor /> : null}
+  </Text>;
   const blocks: { code: boolean; text: string; language?: string }[] = [];
   const fences = /```([^\n`]*)\n([\s\S]*?)(?:```|$)/g;
   let offset = 0;
@@ -25,11 +27,16 @@ export function RichText({ text, streaming, raw = false }: { text: string; strea
           {block.text.split("\n").map((line, lineIndex) => (
             <Text key={lineIndex}>{lineIndex ? "\n" : null}{renderInline(line.replace(/^[-*] /, "• "))}</Text>
           ))}
+          {streaming && index === blocks.length - 1 ? <StreamingCursor /> : null}
         </Text>
       ))}
-      {streaming ? <Text aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="text-accent-border">▍</Text> : null}
+      {streaming && blocks.at(-1)?.code ? <StreamingCursor /> : null}
     </View>
   );
+}
+
+function StreamingCursor() {
+  return <Text aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="text-accent-border">▍</Text>;
 }
 
 const TOKEN = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g;

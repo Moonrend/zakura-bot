@@ -125,10 +125,13 @@ function card(value: unknown): MessageCard | undefined {
     requireValid(Array.isArray(rows) && rows.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === "string")));
     if (headers.length || rows.length) result.table = { headers, rows };
   }
-  requireValid(result.title?.trim() || result.subtitle?.trim() || result.text?.trim() || result.imageUrl ||
+  // Empty card decoration must not discard usable text/files from the same
+  // post. Validate every field above, then let the whole reply's content check
+  // reject a post that has nothing visible at all.
+  return (result.title?.trim() || result.subtitle?.trim() || result.text?.trim() || result.imageUrl ||
     result.fields?.some((field) => field.label.trim() || field.value.trim()) || result.images?.length ||
-    result.table?.headers.some((cell) => cell.trim()) || result.table?.rows.some((row) => row.some((cell) => cell.trim())) || result.links?.length);
-  return result;
+    result.table?.headers.some((cell) => cell.trim()) || result.table?.rows.some((row) => row.some((cell) => cell.trim())) || result.links?.length)
+    ? result : undefined;
 }
 
 function roster(value: unknown): Agent[] {
@@ -190,7 +193,7 @@ export function decodeServerFrame(raw: string): ServerFrame | null {
         interrupted: frame.interrupted ?? false,
         attachments: attachments(payload.attachments), actions: links(payload.actions), card: card(payload.card),
       };
-      requireValid(payload.kind !== "card" || message.card);
+      requireValid(payload.kind !== "card" || payload.card !== undefined);
       requireValid(message.text?.trim() || message.streaming || message.interrupted || message.attachments?.length || message.actions?.length || message.card);
       return { type: "chat_reply", message };
     }
