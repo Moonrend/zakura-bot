@@ -1031,3 +1031,56 @@ test("socket errors cancel delivery and interrupt deadlines while awaiting the c
   assert.equal(sockets.length, 1, "the authentication close remains terminal");
   assert.match(JSON.stringify(events.at(-1)), /Authentication failed/);
 });
+
+test("send, Stop and heartbeat writes racing socket closure retain authorization close codes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const operation of ["send", "interrupt", "heartbeat"] as const) {
+    for (const code of [1008, 4401, 4403]) {
+      const network = networkHarness();
+      const { client, sockets, events } = liveHarness({ network: network.network, heartbeatMs: 20, pongTimeoutMs: 40,
+        acknowledgementTimeoutMs: 80, interruptTimeoutMs: 80 });
+      t.after(() => client.disconnect());
+      await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+      await client.sendMessage({ agentId: "a", clientMessageId: "pending", text: "Unconfirmed message" });
+      if (operation !== "interrupt") await client.interrupt("a");
+      // The browser can expose CLOSING before delivering the close event.
+      socket.readyState = 2;
+      if (operation === "send") await assert.rejects(client.sendMessage({ agentId: "b", text: "Write while closing" }));
+      else if (operation === "interrupt") await assert.rejects(client.interrupt("a"));
+      else t.mock.timers.tick(20);
+      assert.equal(client.getConnectionState(), "error");
+      const count = events.length;
+      t.mock.timers.tick(100);
+      assert.equal(events.length, count, "operation and pong deadlines must not fire while awaiting close");
+      socket.remoteClose(code);
+      assert.match(JSON.stringify(events.at(-1)), /Authentication failed|access denied/, `${operation}: ${code}`);
+      assert.equal(network.listeners.size, 0);
+      network.setOnline(false); network.setOnline(true);
+      t.mock.timers.tick(60_000);
+      assert.equal(sockets.length, 1, "an authorization close is terminal, including after network recovery");
+      client.disconnect();
+    }
+  }
+});
+
+test("a closing socket without a close event reconnects after a bounded wait and never resends", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 80 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  const input = { agentId: "a", clientMessageId: "closing-send", text: "Keep the retry body" };
+  socket.readyState = 2;
+  await assert.rejects(client.sendMessage(input));
+  const count = events.length;
+  t.mock.timers.tick(999);
+  assert.equal(events.length, count);
+  t.mock.timers.tick(1);
+  assert.equal(sockets.length, 1, "the backoff starts after the close grace period");
+  t.mock.timers.tick(1000);
+  assert.equal(sockets.length, 2);
+  sockets[1].open(); sockets[1].ready();
+  assert.deepEqual(sockets[1].sent.map((frame) => frame.type), ["hello"]);
+  await assert.rejects(client.sendMessage({ ...input, text: "Changed text" }), /different text/);
+  await client.sendMessage(input);
+  assert.equal(sockets[1].sent.at(-1)?.clientMessageId, input.clientMessageId);
+});

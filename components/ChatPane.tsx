@@ -27,6 +27,9 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const reducedMotion = useReducedMotion();
+  // Update animation preferences without resetting the thread's reading position.
+  const reducedMotionRef = useRef(reducedMotion);
+  reducedMotionRef.current = reducedMotion;
   const [pinned, setPinned] = useState(true);
   const pinnedRef = useRef(true);
   const lastScrollY = useRef(0);
@@ -44,9 +47,9 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = null;
-      if (pinnedRef.current) scrollRef.current?.scrollToEnd({ animated: animated && !reducedMotion });
+      if (pinnedRef.current) scrollRef.current?.scrollToEnd({ animated: animated && !reducedMotionRef.current });
     });
-  }, [reducedMotion]);
+  }, []);
 
   const pinToLatest = useCallback((animated = false) => {
     pinnedRef.current = true;

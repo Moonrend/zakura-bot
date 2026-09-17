@@ -196,7 +196,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     socket.onopen = () => {
       if (!current()) return;
       if (!this.sendFrame({ type: "hello", protocol: PROTOCOL_VERSION, token: this.opts.token.trim(), client: CLIENT_INFO })) {
-        this.fail("Could not send the channel handshake.", true);
+        this.failWrite("Could not send the channel handshake.");
       }
     };
     socket.onmessage = (event) => {
@@ -208,19 +208,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       this.handleFrame(event.data);
     };
     socket.onerror = () => {
-      if (!current() || this.closeTimer) return;
-      // Browsers fire error before close. Keep the close handler long enough to
-      // receive an auth/policy code instead of turning it into an endless retry.
-      // Older handshake/pong deadlines must not cut this grace period short.
-      this.clearSocketTimers();
-      // The UI settles pending operations as soon as the connection errors.
-      // Their deadlines must not report fresh failures while we await close.
-      this.clearRequestTimers();
-      const detail = "Could not reach Zakura. Check the URL and channel configuration.";
-      this.setState("error", detail);
-      if (current()) this.closeTimer = setTimeout(() => {
-        if (current()) this.fail(detail, true);
-      }, 1000);
+      this.awaitClose(socket, "Could not reach Zakura. Check the URL and channel configuration.");
     };
     socket.onclose = (event) => {
       if (!current()) return;
@@ -230,6 +218,25 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
           : `Connection closed (${event.code}). Reconnecting…`;
       this.fail(detail, !authFailure);
     };
+  }
+
+  private awaitClose(socket: WebSocket, detail: string) {
+    const current = () => this.socket === socket && !this.closedByUser;
+    if (!current() || this.closeTimer) return;
+    // Browsers can report an error or expose CLOSING before dispatching close.
+    // Preserve its auth/policy code; no older deadline may cut this wait short.
+    this.clearSocketTimers();
+    this.clearRequestTimers();
+    this.setState("error", detail);
+    if (current()) this.closeTimer = setTimeout(() => {
+      if (current()) this.fail(detail, true);
+    }, 1000);
+  }
+
+  private failWrite(detail: string) {
+    const socket = this.socket;
+    if (socket && socket.readyState >= 2) this.awaitClose(socket, detail);
+    else this.fail(detail, true);
   }
 
   private fail(detail: string, retry: boolean) {
@@ -266,7 +273,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       this.pongTimer = setTimeout(() => {
         if (this.socket === socket) this.fail("Zakura stopped responding. Reconnecting…", true);
       }, this.opts.pongTimeoutMs ?? 10_000);
-      if (!this.sendFrame({ type: "ping" })) this.fail("Connection lost. Reconnecting…", true);
+      if (!this.sendFrame({ type: "ping" })) this.failWrite("Connection lost. Reconnecting…");
     }, interval);
   }
 
@@ -592,7 +599,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.acknowledgements.set(messageKey, pending);
     if (!this.sendFrame({ type: "send", agentId: input.agentId, clientMessageId, text })) {
       this.acknowledge(input.agentId, clientMessageId);
-      this.fail("Connection lost. Reconnecting…", true);
+      this.failWrite("Connection lost. Reconnecting…");
       throw new Error("The message could not be written to the connection.");
     }
   }
@@ -620,7 +627,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     // this write. Never let that cancelled request reach a replacement turn.
     if (this.interrupts.get(agentId) !== pending) return;
     if (!this.sendFrame({ type: "interrupt", agentId })) {
-      this.fail("Connection lost. Reconnecting…", true);
+      this.failWrite("Connection lost. Reconnecting…");
       throw new Error("Could not stop the reply. Check the channel connection.");
     }
   }

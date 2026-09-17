@@ -73,6 +73,24 @@ test("unfinished inline code keeps links literal while its closing delimiter is 
   ], "a completed message with an unmatched delimiter keeps ordinary Markdown semantics");
 });
 
+test("inline code spans soft line breaks without activating links", () => {
+  const partial = "Use `` [Literal](https://example.com)\nwith `tick`";
+  assert.deepEqual(parseInlineMarkdown(partial + "\n", true), [{ kind: "text", text: partial + "\n" }]);
+  assert.deepEqual(parseInlineMarkdown(partial + " ``\n- [Docs](https://example.com)", true), [
+    { kind: "text", text: "Use " }, { kind: "code", text: "[Literal](https://example.com) with `tick`" },
+    { kind: "text", text: "\n- " }, { kind: "link", text: "Docs", url: "https://example.com" },
+  ]);
+  assert.deepEqual(parseInlineMarkdown("`first\r\nsecond\rthird`"), [{ kind: "code", text: "first second third" }]);
+});
+
+test("inline delimiters cannot consume a following paragraph", () => {
+  const text = "Use `[Docs](https://example.com)\n \nThe next paragraph`";
+  assert.deepEqual(parseInlineMarkdown(text, true), [
+    { kind: "text", text: "Use `" }, { kind: "link", text: "Docs", url: "https://example.com" },
+    { kind: "text", text: "\n \nThe next paragraph`" },
+  ]);
+});
+
 test("unmatched inline delimiters and incomplete link destinations remain visible", () => {
   const partial = "[Guide](https://example.com/guide_(one)";
   for (const text of ["**", "****", "`", "``", "````", "**not *bold**", partial,

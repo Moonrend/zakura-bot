@@ -34,7 +34,24 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
 }
 
 /** The supported inline subset never interprets HTML or unfinished delimiters. */
-export function parseInlineMarkdown(line: string, streaming = false): MarkdownSpan[] {
+export function parseInlineMarkdown(text: string, streaming = false): MarkdownSpan[] {
+  // Soft line breaks can be inside inline code. Blank lines end the paragraph,
+  // so its unmatched delimiters cannot consume or suppress the following one.
+  const parts = text.replace(/\r\n?/g, "\n").split(/(\n(?:[ \t]*\n)+)/);
+  const spans: MarkdownSpan[] = [];
+  for (let index = 0; index < parts.length; index++) {
+    const part: MarkdownSpan[] = index % 2 ? [{ kind: "text", text: parts[index] }]
+      : parseInlineParagraph(parts[index], streaming && index === parts.length - 1);
+    for (const span of part) {
+      const previous = spans.at(-1);
+      if (previous?.kind === "text" && span.kind === "text") previous.text += span.text;
+      else spans.push(span);
+    }
+  }
+  return spans;
+}
+
+function parseInlineParagraph(line: string, streaming: boolean): MarkdownSpan[] {
   // Code delimiters are whole runs, so a single backtick inside double
   // backticks cannot expose a link. Index matching runs once rather than
   // repeatedly scanning a long, unfinished stream for each possible closer.
@@ -63,7 +80,7 @@ export function parseInlineMarkdown(line: string, streaming = false): MarkdownSp
         if (streaming) break;
         continue;
       }
-      let text = line.slice(end, closing);
+      let text = line.slice(end, closing).replace(/\n/g, " ");
       // Markdown removes one padding space around nonblank code, allowing
       // literal backticks at either edge without changing deliberate spacing.
       if (text.startsWith(" ") && text.endsWith(" ") && /[^ ]/.test(text)) text = text.slice(1, -1);

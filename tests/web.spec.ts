@@ -133,6 +133,42 @@ test("invalid reply payloads stay in their conversation and revoked backfill can
   await expect(input).toHaveValue("Keep this draft");
 });
 
+test("streaming inline code keeps links literal across soft line breaks", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep this draft");
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "multiline", createdAt: 1,
+    streaming: true, payload: { text: "Use `` [Literal](https://example.com)" } }));
+  const reply = page.getByTestId("message-multiline");
+  await expect(reply).toContainText("Use `` [Literal](https://example.com)");
+  await expect(reply.getByRole("link")).toHaveCount(0);
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "multiline", delta: "\nwith `tick`\n" }));
+  await expect(reply).toContainText("`tick`");
+  await expect(reply.getByRole("link")).toHaveCount(0);
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "multiline",
+    delta: "``\n- [Docs](https://example.com/guide_(one))" }));
+  await expect(reply).toContainText("Use [Literal](https://example.com) with `tick`");
+  await expect(reply).toContainText("• Docs");
+  await expect(reply.getByRole("link")).toHaveCount(1);
+  await expect(reply.getByRole("link", { name: "Docs, opens in browser", exact: true }))
+    .toHaveAttribute("href", "https://example.com/guide_(one)");
+  channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "multiline" }));
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this draft");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await noOverflow(page);
+  await accessible(page);
+});
+
 test("streaming code fences preserve embedded backticks and complete links keep balanced parentheses", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
@@ -938,6 +974,44 @@ test("composer shrinks after deletion and sending; Escape preserves drafts and r
   await expect.poll(() => input.evaluate((element) => element.clientHeight)).toBe(44);
   await expect(page.getByText("Replying…", { exact: true })).toBeVisible();
   await expect(input).toBeFocused();
+});
+
+test("changing reduced motion preserves the transcript reading position and draft focus", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      for (let index = 0; index < 30; index++) socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `history-${index}`,
+        createdAt: index, payload: { text: `History ${index}. ${"Long content. ".repeat(10)}` } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const transcript = page.getByTestId("chat-transcript");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBeGreaterThan(700);
+  await transcript.hover();
+  await page.mouse.wheel(0, -700);
+  const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
+  await expect(jump).toBeVisible();
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Draft while reading history");
+  const previous = await transcript.evaluate((element) => element.scrollTop);
+  for (const reducedMotion of ["reduce", "no-preference"] as const) {
+    await page.emulateMedia({ reducedMotion });
+    channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `motion-${reducedMotion}`, createdAt: 40,
+      payload: { text: "New content while reading history" } }));
+    await expect(page.getByTestId(`message-motion-${reducedMotion}`)).toHaveCount(1);
+    await expect(jump).toBeVisible();
+    await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(previous);
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue("Draft while reading history");
+  }
+  await jump.press("Enter");
+  await expect(transcript).toBeFocused();
+  await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(80);
 });
 
 test("live roster refresh, stream replay, interrupt denial and offline recovery preserve the conversation", async ({ page }) => {
