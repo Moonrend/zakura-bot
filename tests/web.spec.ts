@@ -16,6 +16,110 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+for (const width of [320, 1024]) test(`unsupported uploads keep their explanation and channel recovery reachable in short windows (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 220 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false,
+  })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  const draft = "Keep this draft";
+  await input.fill(draft);
+  channel!.close({ code: 4401 });
+  const reconnect = page.getByRole("button", { name: "Reconnect", exact: true });
+  await expect(reconnect).toBeVisible();
+  const notice = "File uploads aren’t available yet. Paste text or a link instead.";
+  await input.evaluate((element) => {
+    const data = new DataTransfer();
+    data.items.add(new File(["image"], "photo.png", { type: "image/png" }));
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+  });
+  await expect(page.getByText(notice, { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue(draft);
+  const details = page.getByRole("region", { name: "Channel status details", exact: true });
+  await expect(details).toContainText(notice);
+  await expect(details).toContainText("Authentication failed");
+  for (const control of [input, reconnect, page.getByRole("button", { name: "Edit connection settings", exact: true })]) {
+    const box = (await control.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(220);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  await details.press("Control+End");
+  await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await page.setViewportSize({ width, height: 720 });
+  await expect(details).not.toContainText(notice);
+  await expect(page.getByText(notice, { exact: true })).toBeVisible();
+  await page.setViewportSize({ width, height: 220 });
+  await expect(details).toContainText(notice);
+  await reconnect.press("Enter");
+  await expect(reconnect).toHaveCount(0);
+  await expect(page.getByText(notice, { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+  channel!.send(JSON.stringify({ type: "error", agentId: "live", message: "Keep this separate channel error" }));
+  await expect(details).toContainText("Keep this separate channel error");
+  await page.getByRole("button", { name: "Dismiss attachment notice", exact: true }).press("Enter");
+  await expect(page.getByText(notice, { exact: true })).toHaveCount(0);
+  await expect(details).toContainText("Keep this separate channel error");
+  await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(page.getByTestId("chat-transcript")).toBeFocused();
+  await page.getByRole("button", { name: "Dismiss error", exact: true }).press("Enter");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(input).toHaveValue(draft);
+  await noOverflow(page);
+  await accessible(page);
+});
+
+test("new channel errors start at their explanation while unchanged details retain reading position and focus", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 320 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false,
+  })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep this draft");
+  const first = { type: "error", agentId: "live", message: `First error. ${"An explanation. ".repeat(50)}` };
+  channel!.send(JSON.stringify(first));
+  const details = page.getByRole("region", { name: "Channel status details", exact: true });
+  await details.press("Control+End");
+  await expect.poll(() => details.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(2);
+  const y = await details.evaluate((element) => element.scrollTop);
+  channel!.send(JSON.stringify(first));
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "reply", createdAt: 1,
+    payload: { text: "An unrelated reply" } }));
+  await expect(page.getByTestId("message-reply")).toBeVisible();
+  expect(await details.evaluate((element) => element.scrollTop)).toBe(y);
+  await expect(details).toBeFocused();
+  const second = `New actionable error. ${"A different explanation. ".repeat(50)}`;
+  channel!.send(JSON.stringify({ type: "error", agentId: "live", message: second }));
+  await expect(details).toContainText(second);
+  await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(details).toBeFocused();
+  await input.focus();
+  channel!.send(JSON.stringify({ type: "error", agentId: "live", message: "Another error" }));
+  await expect(details).toContainText("Another error");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this draft");
+});
+
 for (const width of [320, 1024]) test(`connection recovery and multiline drafts remain reachable in short windows (${width}px)`, async ({ page }) => {
   await page.setViewportSize({ width, height: 320 });
   let channel: WebSocketRoute | undefined;

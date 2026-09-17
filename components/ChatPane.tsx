@@ -11,6 +11,7 @@ import { formatDay, useStore } from "@/lib/store";
 import { previewFromMessages } from "@/lib/chat-state";
 import { useReducedMotion } from "@/lib/use-reduced-motion";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
+import { UPLOAD_NOTICE } from "@/lib/use-file-drop-guard";
 import type { ChatMessage } from "@/lib/types";
 
 const SUGGESTIONS = ["Say hello", "How do settings work?", "Run a slow reply", "help"];
@@ -26,7 +27,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const deliveryPending = messages.some((message) => message.pending);
   const scrollRef = useRef<ScrollView>(null);
   const scrollFrame = useRef<number | null>(null);
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const compact = width < 768;
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -42,6 +43,11 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const contentHeight = useRef(0);
   const [historyStart, setHistoryStart] = useState<HistoryStart | null>(null);
   const [historyNotice, setHistoryNotice] = useState("");
+  const [attachmentNoticeAgent, setAttachmentNoticeAgent] = useState<string | null>(null);
+  const attachmentNotice = !!selectedId && attachmentNoticeAgent === selectedId;
+  const setAttachmentNotice = useCallback((visible: boolean) => {
+    setAttachmentNoticeAgent(visible ? selectedId : null);
+  }, [selectedId]);
   const firstVisibleMessage = useRef<HistoryStart | null>(null);
   const historyAnchor = useRef<HistoryAnchor | null>(null);
   const recentStart = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
@@ -150,6 +156,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     historyAnchor.current = null;
     setHistoryStart(null);
     setHistoryNotice("");
+    setAttachmentNoticeAgent(null);
     setPinned(true);
     scrollToLatest();
   }, [selectedId, scrollToLatest]);
@@ -247,7 +254,8 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
         </View>
       </View>
 
-      <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner onFocusLost={focusTranscript} /></View>
+      <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner onFocusLost={focusTranscript}
+        notice={height < 400 && attachmentNotice ? { message: UPLOAD_NOTICE, onDismiss: () => setAttachmentNotice(false) } : undefined} /></View>
       <View key={selectedId} ref={setConversationRef} className="min-h-0 min-w-0 flex-1">
         {!agent ? (
           <ScrollView ref={scrollRef} className="min-h-0 flex-1" accessibilityLabel="Channel setup"
@@ -324,6 +332,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
             {busy ? `${agent.name} is replying.` : lastReply ? `${agent.name}${lastReply.interrupted ? " stopped" : " replied"}: ${lastReplySummary}` : "Ready for your message."}
           </Text>
           <Composer agentName={agent.name} busy={busy} deliveryPending={deliveryPending}
+            attachmentNotice={attachmentNotice} setAttachmentNotice={setAttachmentNotice}
             agentOffline={agent.status === "offline"} bottomInset={insets.bottom} onSubmit={() => pinToLatest()} />
         </>}
       </View>

@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
 
+export const UPLOAD_NOTICE = "File uploads aren’t available yet. Paste text or a link instead.";
+
 export function containsFiles(data: DataTransfer | null): boolean {
   return !!data && (Array.from(data.types).includes("Files") ||
     Array.from(data.items).some((item) => item.kind === "file"));

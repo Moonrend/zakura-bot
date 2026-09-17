@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
 import { AlertTriangle, RefreshCw, Settings, WifiOff, X } from "lucide-react-native";
 import { useStore } from "@/lib/store";
@@ -6,10 +7,12 @@ import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { useRouter } from "expo-router";
 
 /**
- * Top-of-thread banner for connection problems and channel errors.
- * Renders nothing when connected and error-free.
+ * Top-of-thread banner for connection problems, channel errors and compact notices.
  */
-export function StatusBanner({ onFocusLost }: { onFocusLost: () => void }) {
+export function StatusBanner({ onFocusLost, notice }: {
+  onFocusLost: () => void;
+  notice?: { message: string; onDismiss: () => void };
+}) {
   const { connection, connectionDetail, lastError, reconnect, dismissError, settings, selectedId } =
     useStore();
   const router = useRouter();
@@ -17,12 +20,17 @@ export function StatusBanner({ onFocusLost }: { onFocusLost: () => void }) {
   const shortWindow = height < 400;
 
   const error = lastError && (!lastError.agentId || lastError.agentId === selectedId) ? lastError : null;
+  const contentKey = JSON.stringify([connection, connection === "connected" ? error : connectionDetail, notice?.message]);
+  // A short viewport has room for one status area. Keep the upload explanation
+  // and connection recovery together instead of growing the composer footer.
+  const noticeText = notice ? <Text className="text-[13px] leading-5 text-ink">{notice.message}</Text> : null;
 
-  if (connection === "connected" && !error) return null;
+  if (connection === "connected" && !error && !notice) return null;
 
   if (connection === "connecting") {
     return (
-      <Banner key="connecting" tone="muted" onFocusLost={onFocusLost} icon={<ActivityIndicator size="small" color="#fcfcfc99" />}>
+      <Banner key="connecting" tone="muted" contentKey={contentKey} onFocusLost={onFocusLost} icon={<ActivityIndicator size="small" color="#fcfcfc99" />}>
+        {noticeText}
         <Text className="text-[13px] text-ink-secondary">
           Connecting to Zakura{connectionDetail ? ` · ${connectionDetail}` : "…"}
         </Text>
@@ -36,6 +44,7 @@ export function StatusBanner({ onFocusLost }: { onFocusLost: () => void }) {
       <Banner
         key="connection-error"
         tone="danger"
+        contentKey={contentKey}
         onFocusLost={onFocusLost}
         icon={<WifiOff size={14} color="#ff5667" />}
         action={
@@ -56,6 +65,7 @@ export function StatusBanner({ onFocusLost }: { onFocusLost: () => void }) {
           </Pressable> : null}</View>
         }
       >
+        {noticeText}
         <Text className="text-[13px] leading-5 text-ink">
           {connection === "error" ? "Channel error" : "Disconnected"}
           {connectionDetail ? ` · ${connectionDetail}` : ""}
@@ -69,27 +79,29 @@ export function StatusBanner({ onFocusLost }: { onFocusLost: () => void }) {
     );
   }
 
-  // connected + error
+  // Connected with an operation error or a local upload notice.
   return (
     <Banner
-      key="operation-error"
+      key={notice ? "upload-notice" : "operation-error"}
       tone="warning"
+      contentKey={contentKey}
       onFocusLost={onFocusLost}
       icon={<AlertTriangle size={14} color="#ff9800" />}
       action={
         <Pressable
-          onPress={dismissError}
+          onPress={notice ? notice.onDismiss : dismissError}
           accessibilityRole="button"
-          accessibilityLabel="Dismiss error"
+          accessibilityLabel={notice ? "Dismiss attachment notice" : "Dismiss error"}
           className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
         >
           <X size={14} color="#fcfcfc99" />
         </Pressable>
       }
     >
-      <Text className="text-[13px] leading-5 text-ink">
-        {error?.message}
-      </Text>
+      {noticeText}
+      {error ? <Text className="text-[13px] leading-5 text-ink">
+        {error.message}
+      </Text> : null}
     </Banner>
   );
 }
@@ -100,16 +112,24 @@ function Banner({
   action,
   children,
   onFocusLost,
+  contentKey,
 }: {
   tone: "muted" | "danger" | "warning";
   icon: React.ReactNode;
   action?: React.ReactNode;
   children: React.ReactNode;
   onFocusLost: () => void;
+  contentKey: string;
 }) {
   const { height } = useWindowDimensions();
   const shortWindow = height < 400;
   const setRef = useFocusOnRemoval(onFocusLost);
+  const detailsRef = useRef<ScrollView>(null);
+  useLayoutEffect(() => {
+    // Reuse the focusable region, but do not leave a replacement explanation
+    // scrolled to the end of the previous error. Ordinary renders keep its y.
+    detailsRef.current?.scrollTo({ y: 0, animated: false });
+  }, [contentKey]);
   return (
     <View ref={setRef}
       accessibilityLiveRegion="polite"
@@ -123,7 +143,7 @@ function Banner({
       )}
     >
       {icon}
-      <ScrollView className="min-w-0 flex-1" style={{ maxHeight: shortWindow ? 44 : Math.min(180, height * 0.25) }}
+      <ScrollView ref={detailsRef} className="min-w-0 flex-1" style={{ maxHeight: shortWindow ? 44 : Math.min(180, height * 0.25) }}
         accessibilityLabel="Channel status details" role={Platform.OS === "web" ? "region" : undefined}
         tabIndex={Platform.OS === "web" ? 0 : undefined} keyboardShouldPersistTaps="handled">
         {children}

@@ -4,15 +4,18 @@ import { ArrowUp, Plus, Square } from "lucide-react-native";
 import { useStore } from "@/lib/store";
 import { MAX_MESSAGE_LENGTH } from "@/lib/channel";
 import { cn } from "@/lib/cn";
-import { containsFiles } from "@/lib/use-file-drop-guard";
+import { containsFiles, UPLOAD_NOTICE } from "@/lib/use-file-drop-guard";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 
-export function Composer({ agentName, busy, deliveryPending = false, agentOffline = false, bottomInset = 0, onSubmit }: {
+export function Composer({ agentName, busy, deliveryPending = false, agentOffline = false, bottomInset = 0,
+  attachmentNotice, setAttachmentNotice, onSubmit }: {
   agentName: string;
   busy: boolean;
   deliveryPending?: boolean;
   agentOffline?: boolean;
   bottomInset?: number;
+  attachmentNotice: boolean;
+  setAttachmentNotice: (visible: boolean) => void;
   onSubmit: () => void;
 }) {
   const { selectedId, draftsByAgent, setDraft, clearDraft, send, interrupt, interrupting, connection } = useStore();
@@ -24,7 +27,6 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   const [focused, setFocused] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [height, setHeight] = useState(44);
-  const [attachmentNotice, setAttachmentNotice] = useState(false);
   const sending = useRef(false);
   const filePastePending = useRef(false);
   const inputRef = useRef<TextInput>(null);
@@ -67,7 +69,7 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
       input?.removeEventListener("paste", paste);
       if (pasteReset) clearTimeout(pasteReset);
     };
-  }, []);
+  }, [setAttachmentNotice]);
 
   const resizeWebInput = useCallback(() => {
     if (Platform.OS !== "web") return;
@@ -112,7 +114,7 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
     }
   };
 
-  const hint = attachmentNotice ? "File uploads aren’t available yet. Paste text or a link instead."
+  const hint = attachmentNotice ? UPLOAD_NOTICE
     : offline ? "Offline · your draft stays in this conversation"
     : stopping ? "Waiting for the agent to stop… Your draft stays here"
     : busy ? "You can draft your next message while the agent replies"
@@ -188,7 +190,7 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
           </Pressable>
         )}
       </View>
-      {windowHeight >= 400 || attachmentNotice ? <View className="mx-auto mt-2 w-full max-w-3xl flex-row items-start justify-between gap-2 px-2">
+      {windowHeight >= 400 ? <View className="mx-auto mt-2 w-full max-w-3xl flex-row items-start justify-between gap-2 px-2">
         <Text accessibilityLiveRegion={attachmentNotice ? "polite" : "none"}
           className={cn("min-w-0 flex-1 text-[11px] leading-4", attachmentNotice ? "text-warning" : "text-ink-secondary")}>{hint}</Text>
         {text.length > MAX_MESSAGE_LENGTH * 0.8 ? (
