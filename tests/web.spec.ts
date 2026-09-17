@@ -16,6 +16,81 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("dismissing a rendered error cannot dismiss a replacement or an error revealed by a late receipt", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  let pending: { agentId: string; clientMessageId: string; text: string } | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      if (frame.type === "send") {
+        pending = frame;
+        socket.send(JSON.stringify({ type: "error", agentId: frame.agentId, clientMessageId: frame.clientMessageId,
+          message: "Delivery has not been confirmed" }));
+      }
+    });
+  });
+  await page.addInitScript(({ key }) => {
+    localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false }));
+    const target = window as Window & { zakuraTestSocket?: WebSocket };
+    const NativeSocket = window.WebSocket;
+    window.WebSocket = class extends NativeSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        target.zakuraTestSocket = this;
+      }
+    };
+  }, { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep the next draft");
+  const dismiss = page.getByRole("button", { name: "Dismiss error", exact: true });
+  const details = page.getByRole("region", { name: "Channel status details", exact: true });
+  const staleDismiss = async (frame: object) => {
+    await dismiss.focus();
+    const clickedWhileMounted = await page.evaluate((nextFrame) => {
+      const socket = (window as Window & { zakuraTestSocket?: WebSocket }).zakuraTestSocket!;
+      const control = document.querySelector<HTMLElement>('[aria-label="Dismiss error"]')!;
+      // The channel updates synchronously while React still displays the
+      // previous explanation. This click belongs to that rendered error.
+      socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(nextFrame) }));
+      const mounted = control.isConnected;
+      control.click();
+      return mounted;
+    }, frame);
+    expect(clickedWhileMounted).toBe(true);
+  };
+
+  channel!.send(JSON.stringify({ type: "error", agentId: "live", message: "Earlier operation failed" }));
+  await expect(details).toContainText("Earlier operation failed");
+  await staleDismiss({ type: "error", agentId: "live", message: "A different operation failed" });
+  await expect(details).toContainText("A different operation failed");
+  await expect(dismiss).toBeFocused();
+  await expect(input).toHaveValue("Keep the next draft");
+  await dismiss.press("Enter");
+  await expect(details).toHaveCount(0);
+
+  await input.press("Enter");
+  await expect(details).toContainText("Delivery has not been confirmed");
+  // Keep an independent run failure underneath the delivery error.
+  channel!.send(JSON.stringify({ type: "error", agentId: "live", turnEnded: true, message: "The run could not complete" }));
+  await expect(details).toContainText("The run could not complete");
+  channel!.send(JSON.stringify({ type: "error", agentId: "live", clientMessageId: pending!.clientMessageId,
+    message: "Delivery has not been confirmed" }));
+  await expect(details).toContainText("Delivery has not been confirmed");
+  await input.fill("Keep a separate draft");
+  await staleDismiss({ type: "message", message: { id: pending!.clientMessageId, agentId: "live", role: "user", kind: "text",
+    clientMessageId: pending!.clientMessageId, text: pending!.text, createdAt: 1 } });
+  await expect(details).toContainText("The run could not complete");
+  await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toHaveCount(0);
+  await expect(input).toHaveValue("Keep a separate draft");
+  await dismiss.press("Enter");
+  await expect(details).toHaveCount(0);
+  await expect(page.getByTestId("chat-transcript")).toBeFocused();
+});
+
 for (const width of [1440, 320]) test(`settings preserves the transcript reading position while replies arrive offscreen (${width}px)`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 });
   let channel: WebSocketRoute | undefined;

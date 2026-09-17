@@ -223,9 +223,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [bootClient, dispatch]);
   const lastError = [...state.errors].reverse().find((error) => !error.agentId || error.agentId === state.selectedId) ?? null;
   const dismissError = useCallback(() => {
-    const error = [...stateRef.current.errors].reverse().find((item) => !item.agentId || item.agentId === stateRef.current.selectedId);
-    if (error) dispatch({ type: "dismiss_error", error });
-  }, [dispatch]);
+    // A channel event can replace or resolve an error before React commits.
+    // Dismiss only the explanation rendered with this control, never whichever
+    // error a new event has just put at the front of the current state.
+    if (lastError) dispatch({ type: "dismiss_error", error: lastError });
+  }, [dispatch, lastError]);
 
   const updateSettings = useCallback((patch: Partial<AppSettings>): Promise<void> => {
     const pending = saveQueue.current.catch(() => undefined).then(async () => {
