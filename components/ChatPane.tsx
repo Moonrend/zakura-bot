@@ -30,6 +30,13 @@ export function ChatPane() {
   const pinnedRef = useRef(true);
   const lastScrollY = useRef(0);
 
+  const focusTranscript = useCallback(() => {
+    if (Platform.OS === "web") {
+      const node = scrollRef.current?.getScrollableNode() as HTMLElement | null | undefined;
+      node?.focus({ preventScroll: true });
+    }
+  }, []);
+
   const scrollToLatest = useCallback((animated = false) => {
     if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
     scrollFrame.current = requestAnimationFrame(() => {
@@ -126,7 +133,8 @@ export function ChatPane() {
               </View>
             ) : <MessageBubble key={row.message.id} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
               replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
-              retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"} onRetry={(id) => void retryMessage(id)} />)}
+              retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
+              onRetry={(id) => void retryMessage(id)} onRetryFocusLost={focusTranscript} />)}
             {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
               <TypingDots reducedMotion={reducedMotion} /><Text className="min-w-0 flex-1 text-[12px] text-ink-secondary" numberOfLines={1}>{agent.name} is working…</Text>
             </View> : null}
@@ -135,10 +143,7 @@ export function ChatPane() {
             pinToLatest(true);
             // The button disappears after activation. Keep keyboard navigation
             // in the transcript instead of letting focus fall back to the page.
-            if (Platform.OS === "web") {
-              const node = scrollRef.current?.getScrollableNode() as HTMLElement | null | undefined;
-              node?.focus({ preventScroll: true });
-            }
+            focusTranscript();
           }}
             accessibilityRole="button" accessibilityLabel="Jump to latest"
             className="absolute bottom-3 right-4 h-11 w-11 items-center justify-center rounded-full border border-hairline bg-raised active:bg-raised-hover">

@@ -1,4 +1,5 @@
-import { Pressable, Text, View } from "react-native";
+import { useCallback, useRef } from "react";
+import { Platform, Pressable, Text, View } from "react-native";
 import { AlertCircle, RotateCcw } from "lucide-react-native";
 import type { ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/cn";
@@ -10,14 +11,24 @@ type Props = {
   message: ChatMessage;
   replyTarget?: ChatMessage;
   onRetry?: (id: string) => void;
+  onRetryFocusLost?: () => void;
   retryDisabled?: boolean;
   grouped?: boolean;
   reducedMotion?: boolean;
 };
 
-export function MessageBubble({ message, replyTarget, onRetry, retryDisabled, grouped, reducedMotion }: Props) {
+export function MessageBubble({ message, replyTarget, onRetry, onRetryFocusLost, retryDisabled, grouped, reducedMotion }: Props) {
+  const retryRef = useRef<View | null>(null);
+  const setRetryRef = useCallback((node: View | null) => {
+    // A retry or a late receipt removes this control. Keep keyboard navigation
+    // in the transcript when it owns focus, without moving other readers.
+    if (!node && Platform.OS === "web" && retryRef.current &&
+      document.activeElement === (retryRef.current as unknown as HTMLElement)) onRetryFocusLost?.();
+    retryRef.current = node;
+  }, [onRetryFocusLost]);
   if (message.kind === "activity" && message.tool) return <ActivityChip tool={message.tool} reducedMotion={reducedMotion} />;
-  if (message.kind === "system") return <View className="my-2 items-center"><Text className="text-[12px] text-ink-secondary" selectable>{message.text}</Text></View>;
+  if (message.kind === "system") return <View className="my-2 min-w-0 items-center"><Text testID="message-text"
+    className="max-w-full text-[12px] text-ink-secondary" selectable>{message.text}</Text></View>;
   const user = message.role === "user";
   const label = user
     ? message.failed ? "Your message failed to send" : message.pending ? "Sending your message" : "Your message"
@@ -38,7 +49,7 @@ export function MessageBubble({ message, replyTarget, onRetry, retryDisabled, gr
           </Text>
         ) : null}
         {message.failed ? (
-          <Pressable onPress={() => onRetry?.(message.id)} disabled={retryDisabled || !onRetry}
+          <Pressable ref={setRetryRef} onPress={() => onRetry?.(message.id)} disabled={retryDisabled || !onRetry}
             accessibilityRole="button" accessibilityLabel="Retry failed message"
             accessibilityState={{ disabled: retryDisabled || !onRetry }}
             className="mt-1 min-h-11 flex-row items-center gap-1.5 rounded-lg px-2 py-2 active:bg-raised">

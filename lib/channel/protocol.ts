@@ -58,24 +58,35 @@ function withinFrameLimit(raw: string): boolean {
   return true;
 }
 
-/** Used for all links received from a remote channel, including Markdown. */
-export function isHttpUrl(value: unknown): value is string {
-  if (typeof value !== "string") return false;
+/** Resolve without the app's base URL so web and native open the same target. */
+export function normalizeHttpUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
   try {
     const url = new URL(value);
-    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password;
+    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Used for all links received from a remote channel, including Markdown. */
+export function isHttpUrl(value: unknown): value is string {
+  return normalizeHttpUrl(value) !== null;
+}
+
+function httpUrl(value: unknown): string {
+  const url = normalizeHttpUrl(value);
+  requireValid(url);
+  return url;
 }
 
 function links(value: unknown): MessageLink[] | undefined {
   if (value === undefined) return undefined;
   requireValid(Array.isArray(value));
   return value.map((item) => {
-    requireValid(record(item) && typeof item.label === "string" && item.label.trim() && isHttpUrl(item.url));
+    requireValid(record(item) && typeof item.label === "string" && item.label.trim());
     requireValid(item.style === undefined || oneOf(item.style, ["primary", "danger", "default"]));
-    return { label: item.label, url: item.url, style: item.style as MessageLink["style"] };
+    return { label: item.label, url: httpUrl(item.url), style: item.style as MessageLink["style"] };
   });
 }
 
@@ -84,10 +95,10 @@ function attachments(value: unknown): MessageAttachment[] | undefined {
   requireValid(Array.isArray(value) && value.length <= 8);
   return value.map((item) => {
     // Zakura accepts paths and URLs. Its adapter must resolve paths before egress.
-    if (isHttpUrl(item)) return { url: item };
-    requireValid(record(item) && isHttpUrl(item.url) && optionalString(item.name));
+    if (typeof item === "string") return { url: httpUrl(item) };
+    requireValid(record(item) && optionalString(item.name));
     requireValid(item.type === undefined || oneOf(item.type, ["image", "file", "audio", "video"]));
-    return { url: item.url, name: item.name?.trim() || undefined, type: item.type as MessageAttachment["type"] };
+    return { url: httpUrl(item.url), name: item.name?.trim() || undefined, type: item.type as MessageAttachment["type"] };
   });
 }
 
@@ -95,12 +106,11 @@ function card(value: unknown): MessageCard | undefined {
   if (value === undefined) return undefined;
   requireValid(record(value));
   requireValid(optionalString(value.title) && optionalString(value.subtitle) && optionalString(value.text));
-  requireValid(value.imageUrl === undefined || isHttpUrl(value.imageUrl));
   const result: MessageCard = {
     title: value.title,
     subtitle: value.subtitle,
     text: value.text,
-    imageUrl: value.imageUrl as string | undefined,
+    imageUrl: value.imageUrl === undefined ? undefined : httpUrl(value.imageUrl),
     links: links(value.links),
   };
   if (value.fields !== undefined) {
@@ -113,8 +123,8 @@ function card(value: unknown): MessageCard | undefined {
   if (value.images !== undefined) {
     requireValid(Array.isArray(value.images));
     result.images = value.images.map((item) => {
-      requireValid(record(item) && isHttpUrl(item.url) && optionalString(item.alt));
-      return { url: item.url, alt: item.alt?.trim() || undefined };
+      requireValid(record(item) && optionalString(item.alt));
+      return { url: httpUrl(item.url), alt: item.alt?.trim() || undefined };
     });
   }
   if (value.table !== undefined) {

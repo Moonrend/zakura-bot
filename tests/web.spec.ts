@@ -16,6 +16,104 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("conflicting output receipt ids keep delivery pending until a valid echo arrives", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  let sent: { clientMessageId: string; text: string } | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") {
+        socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+        socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "occupied", createdAt: 1, payload: { text: "Keep the existing reply" } }));
+      }
+      if (frame.type === "send") {
+        sent = frame;
+        socket.send(JSON.stringify({ type: "message", message: { id: "occupied", agentId: "live", role: "user", kind: "text",
+          clientMessageId: frame.clientMessageId, text: frame.text, createdAt: 2 } }));
+      }
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("A new message");
+  await input.press("Enter");
+  await expect(page.getByRole("alert")).toContainText("conflicting ids");
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByTestId("message-occupied")).toContainText("Keep the existing reply");
+  await input.fill("Keep this next draft");
+  channel!.send(JSON.stringify({ type: "message", message: { id: "valid-user", agentId: "live", role: "user", kind: "text",
+    clientMessageId: sent!.clientMessageId, text: sent!.text, createdAt: 2 } }));
+  await expect(page.getByTestId(`message-${sent!.clientMessageId}`)).toContainText("A new message");
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  await expect(input).toHaveValue("Keep this next draft");
+});
+
+test("retry and late receipts preserve keyboard focus without stealing it from a draft", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  let sent: { clientMessageId: string; text: string } | undefined;
+  const seen = new Set<string>();
+  const echo = () => channel!.send(JSON.stringify({ type: "message", message: {
+    id: sent!.clientMessageId, clientMessageId: sent!.clientMessageId, agentId: "live", role: "user", kind: "text", text: sent!.text, createdAt: Date.now(),
+  } }));
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      if (frame.type === "send") {
+        sent = frame;
+        if (seen.has(frame.clientMessageId)) echo();
+        else {
+          seen.add(frame.clientMessageId);
+          socket.send(JSON.stringify({ type: "error", agentId: "live", clientMessageId: frame.clientMessageId, message: "Delivery needs a retry" }));
+        }
+      }
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  const transcript = page.getByTestId("chat-transcript");
+  for (const recovery of ["retry", "late", "background"]) {
+    await input.fill(`Message with ${recovery} recovery`);
+    await input.press("Enter");
+    const retry = page.getByRole("button", { name: "Retry failed message", exact: true });
+    await expect(retry).toBeEnabled();
+    await input.fill("Keep the next draft");
+    if (recovery === "retry") await retry.press("Enter");
+    else {
+      if (recovery === "late") await retry.focus();
+      echo();
+    }
+    await expect(retry).toHaveCount(0);
+    await expect(recovery === "background" ? input : transcript).toBeFocused();
+    await expect(input).toHaveValue("Keep the next draft");
+  }
+});
+
+test("long system notices wrap inside a narrow transcript", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  const notice = "reference_".repeat(150);
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      socket.send(JSON.stringify({ type: "message", message: { id: "notice", agentId: "live", role: "system", kind: "system", text: notice, createdAt: 1 } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  await expect(page.getByText(notice, { exact: true })).toBeVisible();
+  const transcript = page.getByTestId("chat-transcript");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await transcript.focus();
+  await transcript.press("Home");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+  await noOverflow(page);
+});
+
 test("static hydration, search, unread and per-agent drafts", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -841,7 +939,8 @@ test("long agent names and blank file labels keep narrow conversations usable", 
   await expect(page.getByRole("button", { name: "Stop generating", exact: true })).toBeVisible();
   await expect.poll(() => transcript.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "files", createdAt: 1, payload: {
-    attachments: [{ url: "https://example.com/report%20final.pdf", name: " \n " }],
+    attachments: [{ url: "https://example.com/report%20final.pdf", name: " \n " },
+      { url: "http:files.example.com/report.pdf?signature=a%2Fb%2B+c&expires=42", name: "Signed report" }],
     card: { images: [{ url: "https://example.com/photo.png", alt: " \t " }] },
   } }));
   channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: false }));
@@ -849,6 +948,9 @@ test("long agent names and blank file labels keep narrow conversations usable", 
   await expect(attachment).toBeVisible();
   await attachment.focus();
   await expect(attachment).toBeFocused();
+  const signedReport = page.getByRole("link", { name: "Signed report, opens in browser", exact: true });
+  await expect(signedReport).toHaveAttribute("href", "http://files.example.com/report.pdf?signature=a%2Fb%2B+c&expires=42");
+  expect(await signedReport.evaluate((element) => (element as HTMLAnchorElement).host)).toBe("files.example.com");
   await expect(page.getByRole("link", { name: "Open image, opens in browser", exact: true })).toBeVisible();
   await noOverflow(page);
   await accessible(page);

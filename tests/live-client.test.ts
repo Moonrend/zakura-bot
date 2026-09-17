@@ -4,6 +4,79 @@ import { CLIENT_INFO, validateLiveSettings, zakuraSocketUrl } from "../lib/chann
 import { decodeServerFrame } from "../lib/channel/protocol";
 import { agents, liveHarness, networkHarness } from "./helpers";
 
+test("receipt ids cannot collide with replies, tools or notices across reconnect", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const output = [
+    { type: "chat_reply", agentId: "a", messageId: "occupied", createdAt: 1, payload: { text: "Existing reply" } },
+    { type: "tool_activity", agentId: "a", message: { id: "occupied", agentId: "a", role: "assistant", kind: "activity",
+      createdAt: 1, tool: { name: "search", ok: true } } },
+    { type: "message", message: { id: "occupied", agentId: "a", role: "system", kind: "system", text: "Existing notice", createdAt: 1 } },
+  ];
+  for (const frame of output) {
+    const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 100 });
+    t.after(() => client.disconnect());
+    await client.connect(); sockets[0].open(); sockets[0].ready();
+    sockets[0].frame(frame);
+    client.disconnect(); await client.connect();
+    const socket = sockets[1]; socket.open(); socket.ready();
+    await assert.rejects(client.sendMessage({ agentId: "a", clientMessageId: "occupied", text: "New body" }), /already used/);
+    const input = { agentId: "a", clientMessageId: "local", text: "Pending body" };
+    await client.sendMessage(input);
+    const receipt = { type: "message", message: { id: "occupied", clientMessageId: "local", agentId: "a", role: "user", kind: "text",
+      text: input.text, createdAt: 2 } };
+    socket.frame(receipt);
+    assert.match(JSON.stringify(events.at(-1)), /conflicting ids/);
+    socket.frame({ ...receipt, message: { ...receipt.message, id: "server", clientMessageId: "occupied" } });
+    assert.match(JSON.stringify(events.at(-1)), /conflicting ids/);
+    t.mock.timers.tick(100);
+    assert.match(JSON.stringify(events.at(-1)), /Delivery was not confirmed/, "a refused receipt must leave the acknowledgement deadline intact");
+    await client.sendMessage(input);
+    assert.equal(socket.sent.filter((event) => event.type === "send").length, 2, "the invalid receipt must not be cached as delivered");
+    socket.frame({ ...receipt, message: { ...receipt.message, id: "server" } });
+    assert.equal(events.at(-1)?.type, "message");
+    const count = events.length;
+    t.mock.timers.tick(100);
+    assert.equal(events.length, count);
+    // The same wire id belongs to a separate namespace in another conversation.
+    await client.sendMessage({ agentId: "b", clientMessageId: "occupied", text: "Another agent" });
+    socket.frame({ type: "agents", agents: [agents[1]] });
+    socket.frame({ type: "agents", agents });
+    await client.sendMessage({ agentId: "a", clientMessageId: "occupied", text: "After access was removed" });
+    client.disconnect();
+  }
+});
+
+test("conflicting output ids cannot claim user aliases or start invisible work", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  await client.sendMessage({ agentId: "a", clientMessageId: "local", text: "User body" });
+  for (const id of ["local", "server"]) {
+    if (id === "server") socket.frame({ type: "message", message: { id, clientMessageId: "local", agentId: "a", role: "user", kind: "text", text: "User body", createdAt: 1 } });
+    for (const frame of [
+      { type: "chat_reply", agentId: "a", messageId: id, createdAt: 2, streaming: true, payload: {} },
+      { type: "tool_activity", agentId: "a", message: { id, agentId: "a", role: "assistant", kind: "activity", createdAt: 2, tool: { name: "search" } } },
+      { type: "message", message: { id, agentId: "a", role: "system", kind: "system", text: "Overwritten", createdAt: 2 } },
+    ]) {
+      socket.frame(frame);
+      assert.match(JSON.stringify(events.at(-1)), /conflicting ids/);
+      const count = events.length;
+      socket.frame({ type: "message_delta", agentId: "a", messageId: id, delta: "Invisible tokens" });
+      assert.equal(events.length, count);
+    }
+  }
+  socket.frame({ type: "chat_reply", agentId: "a", messageId: "reply", createdAt: 3, payload: { text: "Visible reply" } });
+  socket.frame({ type: "tool_activity", agentId: "a", message: { id: "reply", agentId: "a", role: "assistant", kind: "activity", createdAt: 3, tool: { name: "search" } } });
+  assert.match(JSON.stringify(events.at(-1)), /conflicting ids/);
+  await client.interrupt("a");
+  socket.frame({ type: "agents", agents });
+  assert.deepEqual(events.at(-1), { type: "interrupt_pending", agentId: "a", pending: false });
+  const count = events.length;
+  t.mock.timers.tick(100);
+  assert.equal(events.length, count, "rejected output must not prevent an idle roster from confirming Stop");
+});
+
 test("socket URLs preserve prefixes and reject credentials or unsupported protocols", () => {
   assert.equal(zakuraSocketUrl(" https://example.com/zakura/ "), "wss://example.com/zakura/api/zakurabot/ws");
   assert.equal(zakuraSocketUrl("ws://localhost:8787/api/zakurabot/ws/"), "ws://localhost:8787/api/zakurabot/ws");
@@ -51,6 +124,21 @@ test("chat_reply normalizes raw text, quotes, attachments, cards and links", () 
   assert.equal(decoded.message.role, "assistant");
   assert.deepEqual(decoded.message.attachments, [{ url: "https://example.com/report.pdf" }]);
   assert.deepEqual(decoded.message.card?.table, { headers: ["Result"], rows: [["Passed"]] });
+});
+
+test("remote links normalize to absolute destinations before a browser can resolve them against the app", () => {
+  const url = "http:files.example.com/report.pdf?signature=a%2Fb%2B+c&expires=42#page=2";
+  const absolute = "http://files.example.com/report.pdf?signature=a%2Fb%2B+c&expires=42#page=2";
+  const decoded = decodeServerFrame(JSON.stringify({ type: "chat_reply", agentId: "a", messageId: "links", createdAt: 1,
+    payload: { attachments: [url, { url }], actions: [{ label: "Download", url }],
+      card: { imageUrl: url, images: [{ url }], links: [{ label: "Report", url }] } } }));
+  assert.equal(decoded?.type, "chat_reply");
+  if (decoded?.type !== "chat_reply") return;
+  assert.deepEqual(decoded.message.attachments?.map((file) => file.url), [absolute, absolute]);
+  assert.equal(decoded.message.actions?.[0].url, absolute);
+  assert.equal(decoded.message.card?.imageUrl, absolute);
+  assert.equal(decoded.message.card?.images?.[0].url, absolute);
+  assert.equal(decoded.message.card?.links?.[0].url, absolute);
 });
 
 test("textless channel replies remain visible; malformed and unsafe payloads are rejected", () => {

@@ -98,6 +98,7 @@ const key = (agentId: string, messageId: string) => JSON.stringify([agentId, mes
 type PendingWrite = { agentId: string; text: string; timer: Timer };
 type SentMessage = { agentId: string; text: string; echo?: ChatMessage };
 type ReceiptAlias = { agentId: string; clientMessageId: string };
+type OutputIdentity = Pick<ChatMessage, "agentId" | "role" | "kind">;
 type PendingInterrupt = { timer: Timer | null };
 
 export class LiveZakuraChannelClient implements ZakuraChannelClient {
@@ -122,6 +123,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   // Keep idempotency content through retries and reconnects, until access is removed.
   private sentMessages = new Map<string, SentMessage>();
   private receiptAliases = new Map<string, ReceiptAlias>();
+  // Unlike active streams, message identities outlive the socket. A receipt
+  // must not be acknowledged if its ids would replace a reply, tool or notice.
+  private outputIdentities = new Map<string, OutputIdentity>();
   // At most one outstanding stop request per agent.
   private interrupts = new Map<string, PendingInterrupt>();
   private network: ChannelNetworkStatus | undefined;
@@ -320,6 +324,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       case "chat_reply": {
         const messageKey = key(frame.message.agentId, frame.message.id);
         if (frame.message.streaming && (this.replies.has(messageKey) || this.roster.get(frame.message.agentId) === "offline")) return;
+        if (!this.acceptOutputIdentity(frame.message)) return;
         this.replies.set(messageKey, { agentId: frame.message.agentId, active: !!frame.message.streaming });
         this.emitter.emit({ type: "message", message: frame.message });
         break;
@@ -335,7 +340,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
         break;
       }
       case "message": {
-        const message = frame.message.role === "user" ? this.receiveReceipt(frame.message) : frame.message;
+        const message = frame.message.role === "user" ? this.receiveReceipt(frame.message)
+          : this.acceptOutputIdentity(frame.message) ? frame.message : null;
         if (message) this.emitter.emit({ type: "message", message });
         break;
       }
@@ -353,6 +359,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
         const messageKey = key(frame.agentId, frame.message.id);
         const active = frame.message.tool?.ok === undefined && !frame.message.tool?.interrupted;
         if (active && (this.roster.get(frame.agentId) === "offline" || this.activities.get(messageKey)?.active === false)) return;
+        if (!this.acceptOutputIdentity(frame.message)) return;
         this.activities.set(messageKey, { agentId: frame.agentId, active });
         this.emitter.emit(frame);
         break;
@@ -383,6 +390,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     }
     for (const [messageKey, alias] of this.receiptAliases) {
       if (!this.roster.has(alias.agentId)) this.receiptAliases.delete(messageKey);
+    }
+    for (const [messageKey, identity] of this.outputIdentities) {
+      if (!this.roster.has(identity.agentId)) this.outputIdentities.delete(messageKey);
     }
     const confirmedStops: [string, PendingInterrupt][] = [];
     for (const [agentId, pending] of this.interrupts) {
@@ -445,7 +455,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     const sent = this.sentMessages.get(messageKey);
     const idOwner = this.sentMessages.get(serverKey);
     const clientAlias = this.receiptAliases.get(messageKey);
-    if ((alias && alias.clientMessageId !== clientMessageId) ||
+    if (this.outputIdentities.has(serverKey) || this.outputIdentities.has(messageKey) ||
+      (alias && alias.clientMessageId !== clientMessageId) ||
       (clientAlias && clientAlias.clientMessageId !== clientMessageId) ||
       (idOwner && idOwner !== sent) || (sent?.echo && sent.echo.id !== message.id)) {
       this.emitter.emit({ type: "error", agentId: message.agentId, turnEnded: false,
@@ -462,6 +473,19 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.receiptAliases.set(serverKey, { agentId: message.agentId, clientMessageId });
     this.acknowledge(message.agentId, clientMessageId);
     return receipt;
+  }
+
+  private acceptOutputIdentity(message: ChatMessage): boolean {
+    const messageKey = key(message.agentId, message.id);
+    const previous = this.outputIdentities.get(messageKey);
+    if (this.sentMessages.has(messageKey) || this.receiptAliases.has(messageKey) ||
+      (previous && (previous.role !== message.role || previous.kind !== message.kind))) {
+      this.emitter.emit({ type: "error", agentId: message.agentId, turnEnded: false,
+        message: "Zakura returned channel messages with conflicting ids." });
+      return false;
+    }
+    this.outputIdentities.set(messageKey, { agentId: message.agentId, role: message.role, kind: message.kind });
+    return true;
   }
 
   private sendFrame(frame: Record<string, unknown>): boolean {
@@ -515,6 +539,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     const clientMessageId = input.clientMessageId ?? uid("user");
     if (!isChannelId(clientMessageId)) throw new Error("Invalid message id.");
     const messageKey = key(input.agentId, clientMessageId);
+    if (this.outputIdentities.has(messageKey)) throw new Error("This message id is already used by another channel message. Send a new message instead.");
     const alias = this.receiptAliases.get(messageKey);
     if (alias && alias.clientMessageId !== clientMessageId) throw new Error("This message id is already used by another receipt. Send a new message instead.");
     const sent = this.sentMessages.get(messageKey);
