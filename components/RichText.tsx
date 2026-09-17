@@ -3,7 +3,9 @@ import { parseInlineMarkdown, parseMarkdownBlocks } from "@/lib/markdown";
 import { ExternalLink } from "./ExternalLink";
 
 /** Small, selectable Markdown subset. HTML is always displayed as text. */
-export function RichText({ text, streaming, raw = false }: { text: string; streaming?: boolean; raw?: boolean }) {
+export function RichText({ text, streaming, raw = false, onFocusLost }: {
+  text: string; streaming?: boolean; raw?: boolean; onFocusLost?: () => void;
+}) {
   if (raw) return <Text testID="message-text" className="text-[15px] leading-[22px] text-ink" selectable>
     {text}{streaming ? <StreamingCursor /> : null}
   </Text>;
@@ -17,7 +19,7 @@ export function RichText({ text, streaming, raw = false }: { text: string; strea
         </View>
       ) : (
         <Text key={index} testID="message-text" className="text-[15px] leading-[22px] text-ink" selectable>
-          {renderInline(block.text, !!streaming && index === blocks.length - 1)}
+          {renderInline(block.text, !!streaming && index === blocks.length - 1, onFocusLost)}
           {streaming && index === blocks.length - 1 ? <StreamingCursor /> : null}
         </Text>
       ))}
@@ -30,7 +32,7 @@ function StreamingCursor() {
   return <Text aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="text-accent-border">▍</Text>;
 }
 
-function renderInline(text: string, streaming = false) {
+function renderInline(text: string, streaming = false, onFocusLost?: () => void) {
   let lineStart = true;
   return parseInlineMarkdown(text, streaming).map((span, index) => {
     // Convert list markers only in plain text, after code spans have been
@@ -40,7 +42,7 @@ function renderInline(text: string, streaming = false) {
     if (span.text) lineStart = span.kind === "text" && span.text.endsWith("\n");
     if (span.kind === "strong") return <Text key={index} className="font-semibold">{span.text}</Text>;
     if (span.kind === "code") return <Text key={index} className="bg-inset font-mono text-[13px] text-ink">{span.text}</Text>;
-    if (span.kind === "link") return <ExternalLink key={index} label={span.text} url={span.url} />;
+    if (span.kind === "link") return <ExternalLink key={index} label={span.text} url={span.url} onFocusLost={onFocusLost} />;
     return <Text key={index}>{plain}</Text>;
   });
 }

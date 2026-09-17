@@ -16,6 +16,64 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("reply updates preserve the focused link through reordering and restore transcript focus when its destination disappears", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep my draft through reply updates");
+  const transcript = page.getByTestId("chat-transcript");
+  const update = (payload: object) => channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live",
+    messageId: "report", createdAt: 1, payload }));
+
+  for (const kind of ["actions", "attachments", "images", "links"] as const) {
+    const payload = (names: string[]) => {
+      const links = names.map((name) => ({ url: `https://example.com/${name}`, label: name, name, alt: name }));
+      return { text: "Updated report", ...(kind === "images" || kind === "links" ? { card: { [kind]: links } } : { [kind]: links }) };
+    };
+    update(payload(["First", "Second"]));
+    const second = page.getByRole("link", { name: "Second, opens in browser", exact: true });
+    await second.focus();
+    update(payload(["Second", "First", "Third"]));
+    await expect(page.getByRole("link", { name: "Third, opens in browser", exact: true })).toHaveCount(1);
+    await expect(second).toBeFocused();
+    update(payload(["First", "Third"]));
+    await expect(second).toHaveCount(0);
+    await expect(transcript).toBeFocused();
+    await expect(input).toHaveValue("Keep my draft through reply updates");
+
+    // An unrelated update must never pull focus away from the next draft.
+    await input.focus();
+    update(payload(["Third"]));
+    await expect(page.getByRole("link", { name: "First, opens in browser", exact: true })).toHaveCount(0);
+    await expect(input).toBeFocused();
+  }
+
+  update({ text: "Report", actions: [{ label: "Download", url: "https://example.com/original" }] });
+  const download = page.getByRole("link", { name: "Download, opens in browser", exact: true });
+  await download.focus();
+  update({ text: "Report", actions: [{ label: "Download", url: "https://example.com/replacement" }] });
+  await expect(download).toHaveAttribute("href", "https://example.com/replacement");
+  await expect(transcript).toBeFocused();
+
+  update({ text: "Read [the report](https://example.com/original)." });
+  await page.getByRole("link", { name: "the report, opens in browser", exact: true }).focus();
+  update({ text: "Read [the report](https://example.com/replacement)." });
+  await expect(page.getByRole("link", { name: "the report, opens in browser", exact: true })).toHaveAttribute("href", "https://example.com/replacement");
+  await expect(transcript).toBeFocused();
+  await expect(input).toHaveValue("Keep my draft through reply updates");
+  await transcript.press("Home");
+  await expect(page.getByRole("button", { name: "Jump to latest", exact: true })).toHaveCount(0);
+  await accessible(page);
+});
+
 for (const width of [1440, 320]) test(`earlier history loads in pages without losing quotes, reading position or keyboard focus (${width}px)`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 });
   let channel: WebSocketRoute | undefined;
@@ -43,6 +101,8 @@ for (const width of [1440, 320]) test(`earlier history loads in pages without lo
   await expect(page.getByTestId("message-history-124")).toContainText("Reply to you");
   await expect(page.getByTestId("message-history-124")).toContainText("The original request outside this page");
   await input.fill("Keep the draft while loading history");
+  // On narrow screens this draft grows the composer. Home must take priority
+  // over any follow scroll still queued by that resize.
   await transcript.focus();
   await transcript.press("Home");
   await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);

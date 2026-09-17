@@ -91,13 +91,28 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     scrollToLatest(animated);
   }, [scrollToLatest]);
 
-  const pauseForDetails = useCallback(() => {
-    // Expanding a tool is a request to read from its beginning. The resulting
-    // content resize and incoming replies must not scroll past the focused chip.
+  const pauseFollowing = useCallback(() => {
+    // An explicit reading action takes precedence over a queued follow scroll.
     keepVisibleHistory();
+    if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = null;
     pinnedRef.current = false;
     setPinned(false);
   }, [keepVisibleHistory]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const node = scrollRef.current?.getScrollableNode() as HTMLElement | undefined;
+    const keydown = (event: KeyboardEvent) => {
+      if (!node || node.scrollHeight <= node.clientHeight || event.defaultPrevented || event.altKey || event.metaKey) return;
+      if (event.target instanceof HTMLElement && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      // Native keyboard scrolling starts after keydown. Waiting for onScroll
+      // lets a pending composer-resize follow move Home's target off the top.
+      if (["Home", "PageUp", "ArrowUp"].includes(event.key) || (event.key === " " && event.shiftKey && event.target === node)) pauseFollowing();
+    };
+    node?.addEventListener("keydown", keydown);
+    return () => node?.removeEventListener("keydown", keydown);
+  }, [selectedId, pauseFollowing]);
 
   const followIfNearEnd = useCallback(() => {
     // Layout can grow the viewport without changing content or scroll offset
@@ -157,7 +172,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     historyAnchor.current = { agentId: selectedId, height: node?.scrollHeight ?? contentHeight.current,
       y: node?.scrollTop ?? lastScrollY.current, element, offset: element ? element.getBoundingClientRect().top - top : undefined };
     const start = Math.max(0, visibleStart - HISTORY_PAGE_SIZE);
-    pauseForDetails();
+    pauseFollowing();
     setHistoryStart({ agentId: selectedId, id: messages[start].id });
     setHistoryNotice(`${visibleStart - start} earlier messages loaded.`);
     // The control moves above the inserted page, or disappears on the last
@@ -260,10 +275,10 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
                 </View>
               ) : <View key={`message_${row.message.id}`} testID={`transcript-row-${row.message.id}`}>
                 <MessageBubble message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
-                onExpandDetails={pauseForDetails}
+                onExpandDetails={pauseFollowing}
                 replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
                 retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
-                onRetry={(id) => void retryMessage(id)} onRetryFocusLost={focusTranscript} />
+                onRetry={(id) => void retryMessage(id)} onFocusLost={focusTranscript} />
               </View>)}
               {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
                 <TypingDots reducedMotion={reducedMotion} /><Text className="min-w-0 flex-1 text-[12px] text-ink-secondary" numberOfLines={1}>{agent.name} is working…</Text>
