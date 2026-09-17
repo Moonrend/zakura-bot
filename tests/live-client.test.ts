@@ -1032,6 +1032,61 @@ test("socket errors cancel delivery and interrupt deadlines while awaiting the c
   assert.match(JSON.stringify(events.at(-1)), /Authentication failed/);
 });
 
+test("network loss on an already closing socket preserves its authorization close", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const readyState of [2, 3]) {
+    for (const code of [1008, 4401, 4403]) {
+      const network = networkHarness();
+      const { client, sockets, events } = liveHarness({ network: network.network, heartbeatMs: 20,
+        pongTimeoutMs: 40, acknowledgementTimeoutMs: 80, interruptTimeoutMs: 80 });
+      t.after(() => client.disconnect());
+      await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+      await client.sendMessage({ agentId: "a", clientMessageId: "pending", text: "Keep the retry body" });
+      await client.interrupt("b");
+      socket.readyState = readyState;
+      // The browser can dispatch offline before error or close, after the
+      // socket has already entered CLOSING/CLOSED.
+      network.setOnline(false);
+      const count = events.length;
+      t.mock.timers.tick(200);
+      assert.equal(events.length, count, "request deadlines cannot interrupt the close grace period");
+      network.setOnline(true);
+      assert.equal(sockets.length, 1, "coming online must not replace a socket awaiting its close code");
+      socket.remoteClose(code);
+      assert.match(JSON.stringify(events.at(-1)), /Authentication failed|access denied/);
+      assert.equal(network.listeners.size, 0);
+      t.mock.timers.tick(5000);
+      assert.equal(sockets.length, 1, "authorization failures must remain terminal after network recovery");
+      client.disconnect();
+    }
+  }
+});
+
+test("an offline closing socket without a close event releases after grace and keeps retries manual", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const network = networkHarness();
+  const { client, sockets } = liveHarness({ network: network.network });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  const input = { agentId: "a", clientMessageId: "pending", text: "Manual retry only" };
+  await client.sendMessage(input);
+  socket.readyState = 2;
+  network.setOnline(false);
+  t.mock.timers.tick(999);
+  assert.ok(socket.onclose, "keep the close handler until grace expires");
+  t.mock.timers.tick(1);
+  assert.equal(socket.onclose, null);
+  t.mock.timers.tick(5000);
+  assert.equal(sockets.length, 1, "stay paused while the browser is offline");
+  network.setOnline(true);
+  assert.equal(sockets.length, 2);
+  sockets[1].open(); sockets[1].ready();
+  assert.deepEqual(sockets[1].sent.map((frame) => frame.type), ["hello"]);
+  await assert.rejects(client.sendMessage({ ...input, text: "Different body" }), /different text/);
+  await client.sendMessage(input);
+  assert.equal(sockets[1].sent.at(-1)?.clientMessageId, input.clientMessageId);
+});
+
 test("send, Stop and heartbeat writes racing socket closure retain authorization close codes", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   for (const operation of ["send", "interrupt", "heartbeat"] as const) {

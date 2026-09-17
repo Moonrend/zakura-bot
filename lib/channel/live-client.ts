@@ -159,9 +159,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.unsubscribeNetwork = this.network.subscribe((online) => {
       if (this.closedByUser) return;
       if (!online) {
-        // An error may precede an authorization close. Preserve that short
-        // grace period even if the browser also reports a network change.
-        if (!this.closeTimer) this.fail(NETWORK_OFFLINE, true);
+        // Offline may arrive before error/close, even when the socket is
+        // already closing. Keep its pending auth/policy code through grace.
+        if (!this.closeTimer && !this.awaitClosingSocket(NETWORK_OFFLINE)) this.fail(NETWORK_OFFLINE, true);
       } else if (!this.socket) {
         this.cancelReconnect();
         this.attempt = 0;

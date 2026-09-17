@@ -34,6 +34,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const pinnedRef = useRef(true);
   const lastScrollY = useRef(0);
   const viewportHeight = useRef(0);
+  const contentHeight = useRef(0);
 
   const focusTranscript = useCallback(() => {
     if (Platform.OS === "web") {
@@ -65,12 +66,21 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     setPinned(false);
   }, []);
 
-  const onContentSizeChange = useCallback((_width: number, height: number) => {
-    const nearEnd = height - viewportHeight.current - lastScrollY.current < 80;
-    // Short details may still fit, and collapsing can bring the end back into
-    // view. Resume following without leaving a redundant jump control behind.
-    if (pinnedRef.current || nearEnd) pinToLatest();
+  const followIfNearEnd = useCallback(() => {
+    // Layout can grow the viewport without changing content or scroll offset
+    // (for example, shortening a draft). Use current web geometry so concurrent
+    // text wrapping and throttled scroll events cannot leave stale distances.
+    const node = Platform.OS === "web" ? scrollRef.current?.getScrollableNode() as HTMLElement | undefined : undefined;
+    const distance = node ? node.scrollHeight - node.clientHeight - node.scrollTop
+      : contentHeight.current - viewportHeight.current - lastScrollY.current;
+    if (pinnedRef.current || distance < 80) pinToLatest();
   }, [pinToLatest]);
+
+  const onContentSizeChange = useCallback((_width: number, height: number) => {
+    contentHeight.current = height;
+    // Short details and collapsing output can also bring the end into view.
+    followIfNearEnd();
+  }, [followIfNearEnd]);
 
   useEffect(() => {
     pinnedRef.current = true;
@@ -141,7 +151,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
               onContentSizeChange={onContentSizeChange}
               onLayout={(event) => {
                 viewportHeight.current = event.nativeEvent.layout.height;
-                if (pinnedRef.current) scrollToLatest();
+                followIfNearEnd();
               }}
               // On web, on-drag also dismisses focus for programmatic auto-scroll.
               keyboardDismissMode={Platform.OS === "web" ? "none" : Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"

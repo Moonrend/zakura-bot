@@ -1034,6 +1034,57 @@ test("composer shrinks after deletion and sending; Escape preserves drafts and r
   await expect(input).toBeFocused();
 });
 
+test("shrinking a multiline draft resumes following when the latest messages are back in view", async ({ page }) => {
+  await page.clock.install();
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      for (let index = 0; index < 30; index++) socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `history-${index}`,
+        createdAt: index, payload: { text: `History ${index}. ${"Previous content. ".repeat(12)}` } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const transcript = page.getByTestId("chat-transcript");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
+  for (const width of [1440, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await input.fill("Draft line\n".repeat(12));
+    await expect.poll(() => input.evaluate((element) => element.clientHeight)).toBe(160);
+    await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(5);
+    await transcript.hover();
+    await page.mouse.wheel(0, -160);
+    await expect(jump).toBeVisible();
+    await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeGreaterThan(140);
+    // Finish the wheel gesture and its trailing scroll event before the
+    // composer changes size, so a viewport-only change has to resume follow.
+    await page.clock.runFor(200);
+    await input.fill("Keep this draft");
+    await expect.poll(() => input.evaluate((element) => element.clientHeight)).toBe(44);
+    await expect(jump).toHaveCount(0);
+    await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(5);
+    channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `after-resize-${width}`, createdAt: 50,
+      payload: { text: "Still following new replies" } }));
+    await expect(page.getByTestId(`message-after-resize-${width}`)).toBeInViewport();
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue("Keep this draft");
+    await input.fill("Draft line\n".repeat(12));
+    await transcript.hover();
+    await page.mouse.wheel(0, -600);
+    await expect(jump).toBeVisible();
+    await page.clock.runFor(200);
+    const readingPosition = await transcript.evaluate((element) => element.scrollTop);
+    await input.fill("Keep reading earlier messages");
+    await expect(jump).toBeVisible();
+    expect(await transcript.evaluate((element) => element.scrollTop)).toBe(readingPosition);
+    await jump.click();
+  }
+});
+
 test("changing reduced motion preserves the transcript reading position and draft focus", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   await page.emulateMedia({ reducedMotion: "no-preference" });
