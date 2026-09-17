@@ -214,12 +214,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         const message = messages.find((item) => item.id === action.clientMessageId || item.serverId === action.clientMessageId);
         if (message?.role !== "user" || (!message.pending && !message.failed)) return state;
         const latestUser = [...messages].reverse().find((item) => item.role === "user");
-        const outputRunning = messages.some(activeOutput);
-        if (action.turnEnded !== false && latestUser?.id === message.id && (!outputRunning || action.turnEnded === true)) {
+        // Rejection or an absent receipt says nothing about an agent that may
+        // already be working, including the interval before its first output.
+        if (action.turnEnded === true && latestUser?.id === message.id) {
           next = endTurn(state, action.agentId);
         }
         next = putMessage(next, { ...message, pending: false, failed: true });
-      } else if (action.agentId && action.turnEnded !== false) next = endTurn(state, action.agentId);
+      } else if (action.agentId && action.turnEnded === true) next = endTurn(state, action.agentId);
       const error: ChannelError = { message: action.message, agentId: action.agentId, clientMessageId: action.clientMessageId };
       return { ...next, errors: [...next.errors.filter((item) => item.agentId !== action.agentId), error] };
     }

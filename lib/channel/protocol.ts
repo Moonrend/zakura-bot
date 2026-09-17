@@ -3,6 +3,7 @@ import type { Agent, ChatMessage, MessageAttachment, MessageCard, MessageLink } 
 import type { ChannelEvent } from "./types";
 
 export const PROTOCOL_VERSION = 1;
+const MAX_FRAME_BYTES = 1_000_000;
 
 export type ServerFrame =
   | { type: "ready"; protocol: number; agents: Agent[] }
@@ -34,6 +35,20 @@ function optionalBool(value: unknown): value is boolean | undefined {
 }
 function timestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 8.64e15;
+}
+
+function withinFrameLimit(raw: string): boolean {
+  if (raw.length > MAX_FRAME_BYTES) return false;
+  // A UTF-16 code unit needs at most three UTF-8 bytes. Most frames fit without
+  // scanning; count larger frames without relying on Node or a TextEncoder polyfill.
+  if (raw.length * 3 <= MAX_FRAME_BYTES) return true;
+  let bytes = 0;
+  for (const character of raw) {
+    const code = character.codePointAt(0)!;
+    bytes += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
+    if (bytes > MAX_FRAME_BYTES) return false;
+  }
+  return true;
 }
 
 /** Used for all links received from a remote channel, including Markdown. */
@@ -129,7 +144,7 @@ function roster(value: unknown): Agent[] {
 
 /** Unknown event types are ignored; malformed known events never reach the store. */
 export function decodeServerFrame(raw: string): ServerFrame | null {
-  requireValid(raw.length <= 1_000_000);
+  requireValid(withinFrameLimit(raw));
   let frame: unknown;
   try { frame = JSON.parse(raw); } catch { throw new Error("Malformed JSON from Zakura."); }
   requireValid(record(frame) && typeof frame.type === "string");
@@ -146,7 +161,9 @@ export function decodeServerFrame(raw: string): ServerFrame | null {
       requireValid(frame.agentId === undefined || id(frame.agentId));
       requireValid(frame.clientMessageId === undefined || (id(frame.clientMessageId) && id(frame.agentId)));
       return { type: "error", message: frame.message, agentId: frame.agentId as string | undefined,
-        clientMessageId: frame.clientMessageId as string | undefined, fatal: frame.fatal, turnEnded: frame.turnEnded };
+        // v1 errors report failed operations. Only the explicit extension can
+        // end a turn; an uncorrelated interrupt refusal may arrive in the next one.
+        clientMessageId: frame.clientMessageId as string | undefined, fatal: frame.fatal, turnEnded: frame.turnEnded ?? false };
     case "chat_reply": {
       requireValid(id(frame.agentId) && id(frame.messageId) && timestamp(frame.createdAt) &&
         optionalBool(frame.streaming) && optionalBool(frame.interrupted) && !(frame.streaming && frame.interrupted));

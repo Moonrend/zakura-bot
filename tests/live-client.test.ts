@@ -411,3 +411,66 @@ test("disconnecting from a Stop progress listener cannot send on a replacement s
   assert.equal(sockets.length, 1);
   assert.equal(sockets[0].sent.some((frame) => frame.type === "interrupt"), false);
 });
+
+test("a late v1 interrupt refusal cannot end the next turn", async (t) => {
+  const { client, sockets, events } = liveHarness(); t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  socket.frame({ type: "typing", agentId: "a", active: true });
+  await client.interrupt("a");
+  // The old turn can finish naturally before the queued interrupt is rejected.
+  socket.frame({ type: "typing", agentId: "a", active: false });
+  socket.frame({ type: "typing", agentId: "a", active: true });
+  socket.frame({ type: "chat_reply", agentId: "a", messageId: "next", createdAt: 2, streaming: true, payload: {} });
+  socket.frame({ type: "error", agentId: "a", message: "The earlier stop request was refused" });
+  assert.equal((events.at(-1) as { turnEnded?: boolean }).turnEnded, false);
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "next", delta: "New reply continues" });
+  assert.equal(events.at(-1)?.type, "message_delta");
+  socket.frame({ type: "error", agentId: "a", message: "Explicit run failure", turnEnded: true });
+  const count = events.length;
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "next", delta: "discarded" });
+  assert.equal(events.length, count);
+});
+
+test("delivery acknowledgement timeouts are operational errors even before the first reply", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness({ acknowledgementTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  await client.sendMessage({ agentId: "a", text: "Working without a receipt", clientMessageId: "user" });
+  socket.frame({ type: "typing", agentId: "a", active: true });
+  t.mock.timers.tick(100);
+  assert.equal(events.at(-1)?.type, "error");
+  assert.equal((events.at(-1) as { turnEnded?: boolean }).turnEnded, false);
+});
+
+test("socket errors near handshake and pong deadlines still preserve the authorization close", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const phase of ["handshake", "heartbeat"] as const) {
+    const { client, sockets, events } = liveHarness({ handshakeTimeoutMs: 100, heartbeatMs: 20, pongTimeoutMs: 10 });
+    t.after(() => client.disconnect());
+    await client.connect(); const socket = sockets[0]; socket.open();
+    if (phase === "handshake") t.mock.timers.tick(99);
+    else { socket.ready(); t.mock.timers.tick(20); t.mock.timers.tick(9); }
+    socket.onerror?.();
+    t.mock.timers.tick(1);
+    socket.remoteClose(4401);
+    t.mock.timers.tick(2000);
+    assert.equal(sockets.length, 1, `${phase} timeout must not swallow the policy close`);
+    assert.match(JSON.stringify(events.at(-1)), /Authentication failed/);
+    client.disconnect();
+  }
+});
+
+test("the frame limit counts UTF-8 bytes, including CJK and surrogate pairs", () => {
+  const frame = (text: string) => JSON.stringify({ type: "error", message: text });
+  for (const text of ["x".repeat(999_960), "汉".repeat(330_000), "😀".repeat(240_000)]) {
+    const raw = frame(text);
+    assert.ok(Buffer.byteLength(raw) <= 1_000_000);
+    assert.equal(decodeServerFrame(raw)?.type, "error");
+  }
+  for (const text of ["x".repeat(1_000_000), "汉".repeat(340_000), "😀".repeat(250_000)]) {
+    const raw = frame(text);
+    assert.ok(Buffer.byteLength(raw) > 1_000_000);
+    assert.throws(() => decodeServerFrame(raw));
+  }
+});

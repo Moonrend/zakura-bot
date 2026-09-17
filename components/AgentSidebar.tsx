@@ -25,8 +25,8 @@ export function AgentSidebar() {
   const visible = useMemo(() => {
     const value = query.trim().toLocaleLowerCase();
     return agents.filter((agent) => (!unreadOnly || agent.unread) && (!value ||
-      [agent.name, agent.title, agent.preview].some((text) => text?.toLocaleLowerCase().includes(value))));
-  }, [agents, query, unreadOnly]);
+      [agent.name, agent.title, agent.preview, draftsByAgent[agent.id]].some((text) => text?.toLocaleLowerCase().includes(value))));
+  }, [agents, draftsByAgent, query, unreadOnly]);
   const connectionLabel = connection === "connected" ? `${transportLabel} channel · connected`
     : connection === "connecting" ? "Connecting…" : connection === "error" ? "Channel error" : "Disconnected";
 

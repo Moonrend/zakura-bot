@@ -4,8 +4,10 @@ import Head from "expo-router/head";
 import { StatusBar } from "expo-status-bar";
 import { View } from "react-native";
 import { StoreProvider } from "@/lib/store";
+import { useFileDropGuard } from "@/lib/use-file-drop-guard";
 
 export default function RootLayout() {
+  useFileDropGuard();
   return (
     <StoreProvider>
       <Head><title>Zakura Bot</title></Head>

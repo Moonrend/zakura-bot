@@ -175,6 +175,7 @@ export class MockZakuraChannelClient implements ZakuraChannelClient {
       this.emitter.emit({
         type: "error",
         agentId,
+        turnEnded: true,
         message: "Demo reply failed. Send another message without “fail” to try again.",
       });
       this.turns.delete(agentId);

@@ -92,7 +92,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   private acknowledgements = new Map<string, PendingWrite>();
   // Keep idempotency content through retries and reconnects, until access is removed.
   private sentMessages = new Map<string, SentMessage>();
-  // A timed-out request stays as a correlation marker for a late v1 refusal.
+  // At most one outstanding stop request per agent.
   private interrupts = new Map<string, { timer: Timer | null }>();
 
   constructor(private readonly opts: LiveClientOptions) {}
@@ -150,6 +150,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       if (!current() || this.closeTimer) return;
       // Browsers fire error before close. Keep the close handler long enough to
       // receive an auth/policy code instead of turning it into an endless retry.
+      // Older handshake/pong deadlines must not cut this grace period short.
+      this.clearSocketTimers();
       const detail = "Could not reach Zakura. Check the URL and channel configuration.";
       this.setState("error", detail);
       if (current()) this.closeTimer = setTimeout(() => {
@@ -214,12 +216,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       }
       if (frame.agentId && !frame.clientMessageId) {
         const agentId = frame.agentId;
-        const requestedInterrupt = this.finishInterrupt(agentId);
+        this.finishInterrupt(agentId);
         if (this.socket !== socket || this.closedByUser) return;
-        // The current Zakura v1 gateway has no operation id or turnEnded flag
-        // on interrupt refusals. Do not mistake those for a completed turn.
-        if (requestedInterrupt && frame.turnEnded === undefined) frame = { ...frame, turnEnded: false };
-        if (frame.turnEnded !== false) this.endOutput(agentId);
+        if (frame.turnEnded === true) this.endOutput(agentId);
       }
       this.emitter.emit(frame);
       return;
@@ -355,12 +354,16 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     try { this.socket.send(JSON.stringify(frame)); return true; } catch { return false; }
   }
 
-  private releaseSocket() {
+  private clearSocketTimers() {
     if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.pongTimer) clearTimeout(this.pongTimer);
     if (this.closeTimer) clearTimeout(this.closeTimer);
     this.handshakeTimer = this.heartbeatTimer = this.pongTimer = this.closeTimer = null;
+  }
+
+  private releaseSocket() {
+    this.clearSocketTimers();
     for (const pending of this.acknowledgements.values()) clearTimeout(pending.timer);
     this.acknowledgements.clear();
     this.replies.clear();
@@ -404,7 +407,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     const pending: PendingWrite = { agentId: input.agentId, text, timer: setTimeout(() => {
       if (this.acknowledgements.get(messageKey) !== pending) return;
       this.acknowledgements.delete(messageKey);
-      this.emitter.emit({ type: "error", agentId: input.agentId, clientMessageId,
+      this.emitter.emit({ type: "error", agentId: input.agentId, clientMessageId, turnEnded: false,
         message: "Delivery was not confirmed. Retry this message to check or resend it." });
     }, this.opts.acknowledgementTimeoutMs ?? 15_000) };
     this.acknowledgements.set(messageKey, pending);
@@ -425,8 +428,11 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       if (this.interrupts.get(agentId) !== pending) return;
       pending.timer = null;
       this.emitter.emit({ type: "interrupt_pending", agentId, pending: false });
-      if (this.interrupts.get(agentId) === pending) this.emitter.emit({ type: "error", agentId, turnEnded: false,
-        message: "Stopping was not confirmed. The agent may still be working; try Stop again." });
+      if (this.interrupts.get(agentId) === pending) {
+        this.interrupts.delete(agentId);
+        this.emitter.emit({ type: "error", agentId, turnEnded: false,
+          message: "Stopping was not confirmed. The agent may still be working; try Stop again." });
+      }
     }, this.opts.interruptTimeoutMs ?? 15_000);
     this.interrupts.set(agentId, pending);
     this.emitter.emit({ type: "interrupt_pending", agentId, pending: true });

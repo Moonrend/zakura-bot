@@ -271,3 +271,16 @@ test("replayed tool starts cannot resurrect completed, cancelled or disconnected
     assert.equal(isAgentWorking(state, "a"), false);
   }
 });
+
+test("an unconfirmed or rejected send cannot clear typing before the first visible reply", () => {
+  let state = initial();
+  state = chatReducer(state, { type: "optimistic", message: { ...reply("user"), role: "user" } });
+  state = chatReducer(state, { type: "typing", agentId: "a", active: true });
+  state = chatReducer(state, { type: "error", agentId: "a", clientMessageId: "user", message: "Delivery not confirmed" });
+  assert.equal(state.messagesByAgent.a[0].failed, true);
+  assert.equal(isAgentWorking(state, "a"), true);
+  state = chatReducer(state, { type: "agents", agents });
+  assert.equal(isAgentWorking(state, "a"), true);
+  state = chatReducer(state, { type: "typing", agentId: "a", active: false });
+  assert.equal(isAgentWorking(state, "a"), false);
+});

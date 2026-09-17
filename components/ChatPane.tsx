@@ -38,6 +38,12 @@ export function ChatPane() {
     });
   }, [reducedMotion]);
 
+  const pinToLatest = useCallback((animated = false) => {
+    pinnedRef.current = true;
+    setPinned(true);
+    scrollToLatest(animated);
+  }, [scrollToLatest]);
+
   useEffect(() => {
     pinnedRef.current = true;
     lastScrollY.current = 0;
@@ -122,7 +128,7 @@ export function ChatPane() {
               <TypingDots reducedMotion={reducedMotion} /><Text className="text-[12px] text-ink-secondary">{agent.name} is working…</Text>
             </View> : null}
           </ScrollView>
-          {!pinned ? <Pressable onPress={() => { pinnedRef.current = true; setPinned(true); scrollToLatest(true); }}
+          {!pinned ? <Pressable onPress={() => pinToLatest(true)}
             accessibilityRole="button" accessibilityLabel="Jump to latest"
             className="absolute bottom-3 right-4 h-11 w-11 items-center justify-center rounded-full border border-hairline bg-raised active:bg-raised-hover">
             <ArrowDown size={19} color="#fcfcfc" />
@@ -131,7 +137,8 @@ export function ChatPane() {
         <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
           {busy ? `${agent.name} is replying.` : lastReply ? `${agent.name}${lastReply.interrupted ? " stopped" : " replied"}: ${lastReply.text ?? lastReply.card?.title ?? "Attachment"}` : "Ready for your message."}
         </Text>
-        <Composer key={selectedId} agentName={agent.name} busy={busy} deliveryPending={deliveryPending} agentOffline={agent.status === "offline"} bottomInset={insets.bottom} />
+        <Composer key={selectedId} agentName={agent.name} busy={busy} deliveryPending={deliveryPending}
+          agentOffline={agent.status === "offline"} bottomInset={insets.bottom} onSubmit={() => pinToLatest()} />
       </>}
     </KeyboardAvoidingView>
   );

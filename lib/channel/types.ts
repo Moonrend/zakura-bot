@@ -23,7 +23,7 @@ export type ChannelEvent =
   /** Local request state; v1 acknowledges interrupt by ending typing or an error. */
   | { type: "interrupt_pending"; agentId: string; pending: boolean }
   | { type: "error"; message: string; agentId?: string; clientMessageId?: string;
-      /** False for operational failures (e.g. interrupt denied) that leave the turn running. */
+      /** Only true explicitly ends a turn. v1 wire errors normalize to false. */
       turnEnded?: boolean };
 
 export type ChannelListener = (event: ChannelEvent) => void;

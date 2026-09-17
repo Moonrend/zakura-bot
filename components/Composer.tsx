@@ -4,13 +4,15 @@ import { ArrowUp, Plus, Square } from "lucide-react-native";
 import { useStore } from "@/lib/store";
 import { MAX_MESSAGE_LENGTH } from "@/lib/channel";
 import { cn } from "@/lib/cn";
+import { containsFiles } from "@/lib/use-file-drop-guard";
 
-export function Composer({ agentName, busy, deliveryPending = false, agentOffline = false, bottomInset = 0 }: {
+export function Composer({ agentName, busy, deliveryPending = false, agentOffline = false, bottomInset = 0, onSubmit }: {
   agentName: string;
   busy: boolean;
   deliveryPending?: boolean;
   agentOffline?: boolean;
   bottomInset?: number;
+  onSubmit: () => void;
 }) {
   const { selectedId, draftsByAgent, setDraft, clearDraft, send, interrupt, interrupting, connection } = useStore();
   const text = draftsByAgent[selectedId] ?? "";
@@ -21,6 +23,7 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   const [height, setHeight] = useState(44);
   const [attachmentNotice, setAttachmentNotice] = useState(false);
   const sending = useRef(false);
+  const filePastePending = useRef(false);
   const inputRef = useRef<TextInput>(null);
   const offline = connection !== "connected" || agentOffline;
   const stopping = !!interrupting[selectedId];
@@ -30,27 +33,29 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   useEffect(() => {
     if (Platform.OS !== "web") return;
     const input = inputRef.current as unknown as HTMLTextAreaElement | null;
-    const hasFiles = (data: DataTransfer | null) => !!data &&
-      (Array.from(data.types).includes("Files") || Array.from(data.items).some((item) => item.kind === "file"));
+    let pasteReset: ReturnType<typeof setTimeout> | undefined;
     const drop = (event: DragEvent) => {
-      if (!hasFiles(event.dataTransfer)) return;
-      // The browser's default file drop can navigate away and discard drafts.
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
-      setAttachmentNotice(true);
+      if (containsFiles(event.dataTransfer)) setAttachmentNotice(true);
     };
     const paste = (event: ClipboardEvent) => {
-      if (!hasFiles(event.clipboardData)) return;
+      filePastePending.current = false;
+      if (!containsFiles(event.clipboardData)) return;
       if (!event.clipboardData?.getData("text/plain")) event.preventDefault();
+      else {
+        // Let the browser insert text (with selection/undo intact), but retain
+        // the skipped-file notice through that paste's subsequent input event.
+        filePastePending.current = true;
+        if (pasteReset) clearTimeout(pasteReset);
+        pasteReset = setTimeout(() => { filePastePending.current = false; }, 0);
+      }
       setAttachmentNotice(true);
     };
-    window.addEventListener("dragover", drop);
     window.addEventListener("drop", drop);
     input?.addEventListener("paste", paste);
     return () => {
-      window.removeEventListener("dragover", drop);
       window.removeEventListener("drop", drop);
       input?.removeEventListener("paste", paste);
+      if (pasteReset) clearTimeout(pasteReset);
     };
   }, []);
 
@@ -86,6 +91,7 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
     const draft = text;
     sending.current = true;
     setSubmitting(true);
+    onSubmit();
     try {
       const ok = await send(draft, agentId);
       if (ok) { clearDraft(agentId, draft); setAttachmentNotice(false); }
@@ -116,7 +122,11 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
         <TextInput
           ref={inputRef}
           value={text}
-          onChangeText={(value) => { setDraft(selectedId, value); setAttachmentNotice(false); }}
+          onChangeText={(value) => {
+            setDraft(selectedId, value);
+            if (!filePastePending.current) setAttachmentNotice(false);
+            filePastePending.current = false;
+          }}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onContentSizeChange={Platform.OS === "web" ? undefined : (event) => setHeight(Math.max(44, event.nativeEvent.contentSize.height))}

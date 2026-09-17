@@ -195,12 +195,16 @@ test("live roster, rejected send retry, chat_reply cards and raw model event iso
   await accessible(page);
 });
 
-test("reading older messages is not interrupted by incoming replies", async ({ page }) => {
+test("reading older messages ignores incoming replies, while sending returns to the latest", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
     channel = socket;
     socket.onMessage((raw) => {
-      if (JSON.parse(String(raw)).type !== "hello") return;
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "send") socket.send(JSON.stringify({ type: "message", message: {
+        id: frame.clientMessageId, clientMessageId: frame.clientMessageId, agentId: "live", role: "user", kind: "text", text: frame.text, createdAt: 60,
+      } }));
+      if (frame.type !== "hello") return;
       socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
       for (let index = 0; index < 30; index++) socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: `r${index}`,
         createdAt: index, payload: { text: `History message ${index}. ${"Long content. ".repeat(10)}` } }));
@@ -225,6 +229,16 @@ test("reading older messages is not interrupted by incoming replies", async ({ p
   expect(await transcript.evaluate((element) => element.scrollTop)).toBe(previous);
   await page.getByRole("button", { name: "Jump to latest", exact: true }).click();
   await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(80);
+  await transcript.hover();
+  await page.mouse.wheel(0, -700);
+  await expect(page.getByRole("button", { name: "Jump to latest", exact: true })).toBeVisible();
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("My next message");
+  await input.press("Enter");
+  await expect(input).toHaveValue("");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(80);
+  await expect(input).toBeFocused();
+  await expect(page.getByRole("button", { name: "Jump to latest", exact: true })).toHaveCount(0);
 });
 
 test("composer shrinks after deletion and sending; Escape preserves drafts and releases focus", async ({ page }) => {
@@ -467,4 +481,79 @@ test("long channel errors keep the composer and keyboard-scrollable details reac
     await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeInViewport();
   }
   await accessible(page);
+});
+
+test("a late stop refusal leaves the next live reply and its draft running", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "busy" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep my next draft");
+  await page.getByRole("button", { name: "Stop generating", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stopping reply", exact: true })).toBeDisabled();
+  channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: false }));
+  channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: true }));
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "next", createdAt: 1, streaming: true, payload: { text: "New reply" } }));
+  channel!.send(JSON.stringify({ type: "error", agentId: "live", message: "Earlier Stop was refused" }));
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "next", delta: " continues" }));
+  await expect(page.getByRole("alert")).toContainText("Earlier Stop was refused");
+  await expect(page.getByTestId("message-next")).toContainText("New reply continues");
+  await expect(page.getByRole("button", { name: "Stop generating", exact: true })).toBeEnabled();
+  await expect(input).toHaveValue("Keep my next draft");
+  channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: false }));
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+});
+
+test("mixed image and text paste keeps the caption and explains the skipped upload", async ({ page, context }) => {
+  await mockReady(page);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const input = page.getByRole("textbox", { name: "Message Zakura", exact: true });
+  await input.fill("My draft: ");
+  await input.press("End");
+  await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const png = await new Promise<Blob>((resolve) => canvas.toBlob((blob) => resolve(blob!), "image/png"));
+    await navigator.clipboard.write([new ClipboardItem({
+      "text/plain": new Blob(["Pasted caption"], { type: "text/plain" }), "image/png": png,
+    })]);
+  });
+  await input.press("ControlOrMeta+V");
+  await expect(input).toHaveValue("My draft: Pasted caption");
+  await expect(page.getByText("File uploads aren’t available yet. Paste text or a link instead.", { exact: true })).toBeVisible();
+  await input.pressSequentially(" edited");
+  await expect(page.getByText("File uploads aren’t available yet. Paste text or a link instead.", { exact: true })).toHaveCount(0);
+});
+
+test("unsupported file drops are blocked on direct settings loads and empty rosters", async ({ page }) => {
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  for (const path of ["/settings", "/"]) {
+    await page.goto(path);
+    if (path === "/settings") await page.getByLabel("Zakura Base URL", { exact: true }).fill("https://unsaved.example.com");
+    else await expect(page.getByText("No agents available", { exact: true })).toBeVisible();
+    const prevented = await page.locator("body").evaluate((element) => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(new File(["draft"], "draft.txt", { type: "text/plain" }));
+      return ["dragover", "drop"].map((type) => {
+        const event = new DragEvent(type, { dataTransfer, bubbles: true, cancelable: true });
+        element.dispatchEvent(event);
+        return event.defaultPrevented;
+      });
+    });
+    expect(prevented).toEqual([true, true]);
+    expect(new URL(page.url()).pathname).toBe(path);
+    if (path === "/settings") await expect(page.getByLabel("Zakura Base URL", { exact: true })).toHaveValue("https://unsaved.example.com");
+  }
 });
