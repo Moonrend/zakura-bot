@@ -82,9 +82,10 @@ export function AgentSidebar({ query, setQuery, unreadOnly, setUnreadOnly }: {
       <ScrollView ref={listRef} className="sidebar-scroll min-h-0 flex-1" contentContainerStyle={{ paddingBottom: 12 }} keyboardShouldPersistTaps="handled"
         accessibilityLabel="Agent list" role={Platform.OS === "web" ? "region" : undefined}
         tabIndex={Platform.OS === "web" ? 0 : undefined}>
-        {/* CSS pins search on taller web windows without remounting focused
-            inputs when the keyboard or viewport changes the available height. */}
-        <View className="sidebar-search bg-panel px-3 pb-2" onLayout={(event) => setSearchHeight(event.nativeEvent.layout.height)}>
+        {/* Use visible window dimensions: a height media query still sees the
+            taller layout viewport while a mobile keyboard covers the page. */}
+        <View className={cn("sidebar-search bg-panel px-3 pb-2", pinSearch && "sidebar-search-pinned")}
+          onLayout={(event) => setSearchHeight(event.nativeEvent.layout.height)}>
           <View className="min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-inset pl-3">
             <Search size={16} color="#b8b8b8" />
             <TextInput ref={searchRef} value={query} onChangeText={setQuery} placeholder="Search agents" placeholderTextColor="#a3a3a3"

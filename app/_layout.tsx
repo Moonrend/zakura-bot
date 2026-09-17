@@ -1,17 +1,26 @@
 import "../global.css";
+import { useEffect, useState } from "react";
 import { Stack } from "expo-router";
 import Head from "expo-router/head";
 import { StatusBar } from "expo-status-bar";
-import { View } from "react-native";
+import { Platform, View, useWindowDimensions } from "react-native";
 import { StoreProvider } from "@/lib/store";
 import { useFileDropGuard } from "@/lib/use-file-drop-guard";
 
 export default function RootLayout() {
   useFileDropGuard();
+  const { height } = useWindowDimensions();
+  const [webViewportHeight, setWebViewportHeight] = useState<number>();
+  useEffect(() => {
+    // Mobile keyboards can shrink visualViewport without changing the page's
+    // percentage height. RN Web dimensions account for that and for pinch zoom.
+    // Apply the constraint after hydration, when browser dimensions are known.
+    if (Platform.OS === "web" && height > 0) setWebViewportHeight(height);
+  }, [height]);
   return (
     <StoreProvider>
       <Head><title>Zakura Bot</title></Head>
-      <View className="flex-1 bg-app">
+      <View className="flex-1 bg-app" style={{ maxHeight: webViewportHeight }}>
         <StatusBar style="light" />
         <Stack
           screenOptions={{

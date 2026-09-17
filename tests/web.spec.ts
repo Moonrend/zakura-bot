@@ -16,6 +16,72 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("mobile keyboard resizing keeps the composer inside the visible viewport and restores its draft layout", async ({ page }) => {
+  await mockReady(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("button", { name: "Open agent list", exact: true })).toBeVisible();
+  const input = page.getByRole("textbox", { name: "Message Zakura", exact: true });
+  const draft = "Keep this multiline draft while the keyboard opens.\n".repeat(6);
+  await input.fill(draft);
+  const send = page.getByRole("button", { name: "Send message", exact: true });
+  const transcript = page.getByTestId("chat-transcript");
+  const originalInputHeight = await input.evaluate((element) => element.clientHeight);
+
+  for (const height of [480, 320, 844]) {
+    // Mobile keyboards can resize only visualViewport; the layout viewport
+    // and its percentage-height containers keep their original height.
+    await page.evaluate((height) => {
+      Object.defineProperty(window.visualViewport, "height", { configurable: true, value: height });
+      window.visualViewport!.dispatchEvent(new Event("resize"));
+    }, height);
+    expect(await page.evaluate(() => innerHeight)).toBe(844);
+    await expect.poll(() => send.evaluate((element) => element.getBoundingClientRect().bottom <= window.visualViewport!.height)).toBe(true);
+    await expect.poll(() => input.evaluate((element) => element.getBoundingClientRect().top >= 0)).toBe(true);
+    await expect.poll(() => transcript.evaluate((element) => element.clientHeight)).toBeGreaterThan(0);
+    await expect(input).toHaveValue(draft);
+    await expect(input).toBeFocused();
+    await expect(send).toBeEnabled();
+  }
+  await expect.poll(() => input.evaluate((element) => element.clientHeight)).toBe(originalInputHeight);
+  await expect.poll(() => send.evaluate((element) => element.getBoundingClientRect().bottom)).toBeGreaterThan(780);
+  await noOverflow(page);
+});
+
+test("the mobile agent drawer fits above the keyboard and lets search scroll away in a short viewport", async ({ page }) => {
+  await mockReady(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const input = page.getByRole("textbox", { name: "Message Zakura", exact: true });
+  await input.fill("Keep the conversation draft while searching");
+  await page.getByRole("button", { name: "Open agent list", exact: true }).click();
+  const search = page.getByRole("textbox", { name: "Search agents", exact: true });
+  await search.fill("r");
+  await page.evaluate(() => {
+    Object.defineProperty(window.visualViewport, "height", { configurable: true, value: 320 });
+    window.visualViewport!.dispatchEvent(new Event("resize"));
+  });
+  const settings = page.getByRole("button", { name: "Open settings", exact: true });
+  await expect.poll(() => settings.evaluate((element) => element.getBoundingClientRect().bottom <= window.visualViewport!.height)).toBe(true);
+  await expect(search).toBeFocused();
+  const list = page.getByRole("region", { name: "Agent list", exact: true });
+  await agent(page, "Ops").focus();
+  const listTop = await list.evaluate((element) => element.getBoundingClientRect().top);
+  await expect.poll(() => search.evaluate((element) => element.getBoundingClientRect().bottom)).toBeLessThanOrEqual(listTop);
+  const lastRow = await agent(page, "Ops").boundingBox();
+  const listBottom = await list.evaluate((element) => element.getBoundingClientRect().bottom);
+  expect(lastRow!.y).toBeGreaterThanOrEqual(listTop);
+  expect(lastRow!.y + lastRow!.height).toBeLessThanOrEqual(listBottom);
+  await expect(search).toHaveValue("r");
+
+  await page.evaluate(() => {
+    Object.defineProperty(window.visualViewport, "height", { configurable: true, value: 844 });
+    window.visualViewport!.dispatchEvent(new Event("resize"));
+  });
+  await expect.poll(() => settings.evaluate((element) => element.getBoundingClientRect().bottom)).toBeGreaterThan(780);
+  await page.getByRole("button", { name: "Close agent list", exact: true }).click();
+  await expect(input).toHaveValue("Keep the conversation draft while searching");
+  await noOverflow(page);
+});
+
 test("quotes resolve late history in their own conversation and summarize card, file and action replies", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
   let channel: WebSocketRoute | undefined;

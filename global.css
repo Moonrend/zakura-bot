@@ -16,9 +16,7 @@
   /* While following, resizing must not anchor a smooth scroll to an old row.
      Readers farther up the transcript still get browser history anchoring. */
   .transcript-following { overflow-anchor: none; }
-  @media (min-height: 400px) {
-    .sidebar-scroll .sidebar-search { position: sticky; top: 0; z-index: 1; }
-  }
+  .sidebar-scroll .sidebar-search-pinned { position: sticky; top: 0; z-index: 1; }
   @media (prefers-reduced-motion: reduce) {
     * { scroll-behavior: auto !important; }
   }

@@ -7,7 +7,7 @@ import { useStore } from "@/lib/store";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 
 export default function HomeScreen() {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const compact = width < 768;
   const { sidebarOpen, setSidebarOpen, settingsReady, setThreadVisible } = useStore();
   // The desktop sidebar and modal have different lifetimes. Keep the user's
@@ -66,7 +66,9 @@ export default function HomeScreen() {
       </View>
       <Modal transparent visible={compact && sidebarOpen} animationType="none"
         onRequestClose={() => setSidebarOpen(false)} statusBarTranslucent>
-        <View className="flex-1" accessibilityViewIsModal>
+        {/* Web modals render outside the app root, so they need the same
+            visible-height constraint when the search keyboard opens. */}
+        <View className="flex-1" accessibilityViewIsModal style={Platform.OS === "web" ? { maxHeight: height } : undefined}>
           <Pressable className="absolute inset-0 bg-black/60" onPress={() => setSidebarOpen(false)}
             accessible={false} focusable={false} />
           <View ref={setDrawerRemovalRef} className="h-full" style={{ width: Math.min(320, Math.max(240, width - 48)) }}>
