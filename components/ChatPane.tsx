@@ -89,7 +89,10 @@ export function ChatPane() {
 
       <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner /></View>
       {!agent ? (
-        <View className="flex-1 items-center justify-center px-8 pb-12">
+        <ScrollView className="min-h-0 flex-1" accessibilityLabel="Channel setup"
+          role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ flexGrow: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingVertical: 32 }}>
           <MessageCircle size={40} color="#b3b3b3" />
           <Text className="mt-5 text-center text-[20px] font-semibold text-ink">{connection === "connecting" ? "Connecting your agents…" : "No agents available"}</Text>
           <Text className="mt-3 max-w-sm text-center text-[14px] leading-6 text-ink-secondary">
@@ -100,7 +103,7 @@ export function ChatPane() {
             className="mt-6 min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-raised px-4 py-3 active:bg-raised-hover">
             <Settings size={16} color="#fcfcfc" /><Text className="text-[14px] text-ink">Connection settings</Text>
           </Pressable>
-        </View>
+        </ScrollView>
       ) : <>
         <View className="min-h-0 min-w-0 flex-1">
           <ScrollView key={selectedId} ref={scrollRef} testID="chat-transcript" className="min-w-0 flex-1"

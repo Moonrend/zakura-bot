@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { ActivityIndicator, Modal, View, useWindowDimensions, Pressable } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { AgentSidebar } from "@/components/AgentSidebar";
@@ -9,6 +9,12 @@ export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 768;
   const { sidebarOpen, setSidebarOpen, settingsReady, setThreadVisible } = useStore();
+
+  useEffect(() => {
+    // The desktop sidebar replaces the drawer; do not reopen an old drawer
+    // when rotating or resizing back to a compact layout.
+    if (!compact) setSidebarOpen(false);
+  }, [compact, setSidebarOpen]);
 
   useFocusEffect(useCallback(() => {
     setThreadVisible(!compact || !sidebarOpen);

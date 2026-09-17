@@ -97,6 +97,12 @@ test("mobile drawer, Escape, offline drafts, touch layout and accessibility", as
   await expect(page.getByRole("button", { name: "Close agent list", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Open agent list", exact: true })).toBeFocused();
   await page.getByRole("button", { name: "Open agent list", exact: true }).click();
+  await page.setViewportSize({ width: 1100, height: 844 });
+  await expect(page.getByRole("button", { name: "Close agent list", exact: true })).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("button", { name: "Open agent list", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close agent list", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open agent list", exact: true }).click();
   await accessible(page);
   await agent(page, "Ops").click();
   await expect(page.getByText("Ops is offline", { exact: true })).toBeVisible();
@@ -556,4 +562,74 @@ test("unsupported file drops are blocked on direct settings loads and empty rost
     expect(new URL(page.url()).pathname).toBe(path);
     if (path === "/settings") await expect(page.getByLabel("Zakura Base URL", { exact: true })).toHaveValue("https://unsaved.example.com");
   }
+});
+
+test("browser offline pauses delivery immediately and reconnect history restores the receipt without resending", async ({ page, context }) => {
+  let channel: WebSocketRoute | undefined;
+  let connections = 0;
+  const sends: { clientMessageId: string; text: string }[] = [];
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") {
+        connections += 1;
+        socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      }
+      if (frame.type === "send") sends.push(frame);
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Saved remotely before losing the receipt");
+  await input.press("Enter");
+  await expect.poll(() => sends.length).toBe(1);
+  await input.fill("Keep my next draft");
+  await context.setOffline(true);
+  await expect(page.getByRole("alert")).toContainText("Network offline");
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toBeDisabled();
+  await input.press("Enter");
+  await expect(input).toHaveValue("Keep my next draft");
+  expect(sends).toHaveLength(1);
+  await context.setOffline(false);
+  await expect.poll(() => connections).toBe(2);
+  channel!.send(JSON.stringify({ type: "message", message: { id: "server-user", clientMessageId: sends[0].clientMessageId,
+    agentId: "live", role: "user", kind: "text", text: sends[0].text, createdAt: 1 } }));
+  await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId(`message-${sends[0].clientMessageId}`)).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  await expect(input).toHaveValue("Keep my next draft");
+  expect(sends).toHaveLength(1);
+});
+
+test("empty channel recovery remains keyboard accessible in a short narrow window", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 320 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const settings = page.getByRole("button", { name: "Open connection settings", exact: true });
+  await expect(page.getByText("No agents available", { exact: true })).toBeVisible();
+  await expect(settings).toBeVisible();
+  channel!.send(JSON.stringify({ type: "error", fatal: true, message: "Binding unavailable. ".repeat(60) }));
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("Binding unavailable");
+  const setup = page.getByRole("region", { name: "Channel setup", exact: true });
+  await setup.focus();
+  await setup.press("End");
+  await expect(settings).toBeInViewport({ ratio: 1 });
+  const alertBounds = await alert.boundingBox();
+  const setupBounds = await setup.boundingBox();
+  expect(setupBounds!.y).toBeGreaterThanOrEqual(alertBounds!.y + alertBounds!.height);
+  await noOverflow(page);
+  await accessible(page);
+  await settings.click();
+  await expect(page.getByLabel("Auth token", { exact: true })).toHaveValue("test-channel-token");
 });

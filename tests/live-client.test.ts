@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CLIENT_INFO, validateLiveSettings, zakuraSocketUrl } from "../lib/channel/live-client";
 import { decodeServerFrame } from "../lib/channel/protocol";
-import { agents, liveHarness } from "./helpers";
+import { agents, liveHarness, networkHarness } from "./helpers";
 
 test("socket URLs preserve prefixes and reject credentials or unsupported protocols", () => {
   assert.equal(zakuraSocketUrl(" https://example.com/zakura/ "), "wss://example.com/zakura/api/zakurabot/ws");
@@ -115,6 +115,81 @@ test("authorization, protocol and fatal server errors are terminal with useful e
     t.mock.timers.tick(60_000);
     assert.equal(sockets.length, 1); assert.equal(client.getConnectionState(), "error"); client.disconnect();
   }
+});
+
+test("unsupported versions are terminal even when their ready roster uses a different schema", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const roster of [undefined, null, { a: { displayName: "Zakura", available: true } }]) {
+    const { client, sockets, events } = liveHarness();
+    t.after(() => client.disconnect());
+    await client.connect(); sockets[0].open();
+    sockets[0].frame({ type: "ready", protocol: 2, agents: roster });
+    assert.equal(client.getConnectionState(), "error");
+    assert.equal(events.some((event) => event.type === "agents"), false);
+    assert.match((events.at(-1) as { detail: string }).detail, /unsupported channel protocol/);
+    t.mock.timers.tick(60_000);
+    assert.equal(sockets.length, 1);
+  }
+});
+
+test("network loss pauses heartbeats and pending operations; reconnect never resends automatically", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const network = networkHarness();
+  const { client, sockets, events } = liveHarness({ network: network.network, heartbeatMs: 20, pongTimeoutMs: 10,
+    acknowledgementTimeoutMs: 100, interruptTimeoutMs: 100 });
+  t.after(() => client.disconnect());
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  await client.sendMessage({ agentId: "a", clientMessageId: "unconfirmed", text: "Keep this id" });
+  sockets[0].frame({ type: "typing", agentId: "a", active: true });
+  await client.interrupt("a");
+  t.mock.timers.tick(20);
+  assert.equal(sockets[0].sent.at(-1)?.type, "ping");
+  network.setOnline(false);
+  assert.equal(client.getConnectionState(), "error");
+  assert.equal(sockets[0].readyState, 3);
+  const count = events.length;
+  t.mock.timers.tick(60_000);
+  assert.equal(events.length, count, "offline requests and heartbeats must not expire again");
+  assert.equal(sockets.length, 1);
+  await assert.rejects(client.sendMessage({ agentId: "a", text: "Offline draft" }), /Not connected/);
+  network.setOnline(true);
+  assert.equal(sockets.length, 2);
+  sockets[1].open(); sockets[1].ready();
+  assert.deepEqual(sockets[1].sent.map((frame) => frame.type), ["hello"]);
+  await assert.rejects(client.sendMessage({ agentId: "a", clientMessageId: "unconfirmed", text: "Changed" }), /different text/);
+  await client.sendMessage({ agentId: "a", clientMessageId: "unconfirmed", text: "Keep this id" });
+  assert.equal(sockets[1].sent.at(-1)?.clientMessageId, "unconfirmed");
+  client.disconnect();
+  assert.equal(network.listeners.size, 0);
+  network.setOnline(false); network.setOnline(true);
+  t.mock.timers.tick(60_000);
+  assert.equal(sockets.length, 2);
+});
+
+test("initial offline state and interrupted backoff wait for a network; access failures stay terminal", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const network = networkHarness(false);
+  const { client, sockets } = liveHarness({ network: network.network });
+  t.after(() => client.disconnect());
+  await client.connect();
+  assert.equal(client.getConnectionState(), "error");
+  assert.equal(network.listeners.size, 1);
+  t.mock.timers.tick(60_000);
+  assert.equal(sockets.length, 0);
+  network.setOnline(true);
+  sockets[0].open(); sockets[0].ready(); sockets[0].remoteClose(1006);
+  network.setOnline(false);
+  t.mock.timers.tick(60_000);
+  assert.equal(sockets.length, 1, "an existing backoff must be cancelled offline");
+  network.setOnline(true);
+  sockets[1].open(); sockets[1].onerror?.();
+  network.setOnline(false);
+  t.mock.timers.tick(999);
+  sockets[1].remoteClose(4401);
+  assert.equal(network.listeners.size, 0);
+  network.setOnline(false); network.setOnline(true);
+  t.mock.timers.tick(60_000);
+  assert.equal(sockets.length, 2, "online events must not retry revoked credentials");
 });
 
 test("heartbeats detect missing pong; stale socket callbacks cannot kill the new connection", async (t) => {

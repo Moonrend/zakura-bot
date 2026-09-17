@@ -5,6 +5,13 @@ import type { ChannelEvent } from "./types";
 export const PROTOCOL_VERSION = 1;
 const MAX_FRAME_BYTES = 1_000_000;
 
+export class UnsupportedChannelProtocolError extends Error {
+  constructor() {
+    super("This server uses an unsupported channel protocol.");
+    this.name = "UnsupportedChannelProtocolError";
+  }
+}
+
 export type ServerFrame =
   | { type: "ready"; protocol: number; agents: Agent[] }
   | { type: "chat_reply"; message: ChatMessage }
@@ -151,6 +158,9 @@ export function decodeServerFrame(raw: string): ServerFrame | null {
   switch (frame.type) {
     case "ready":
       requireValid(typeof frame.protocol === "number" && Number.isSafeInteger(frame.protocol));
+      // A different protocol may also change the roster schema. Report the
+      // version mismatch before interpreting any of that version's data.
+      if (frame.protocol !== PROTOCOL_VERSION) throw new UnsupportedChannelProtocolError();
       return { type: "ready", protocol: frame.protocol, agents: roster(frame.agents) };
     case "agents":
       return { type: "agents", agents: roster(frame.agents) };

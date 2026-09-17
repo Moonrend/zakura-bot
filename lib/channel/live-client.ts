@@ -9,12 +9,17 @@
  */
 import { version } from "../../package.json";
 import type { Agent, ChatMessage } from "../types";
-import { decodeServerFrame, isChannelId, PROTOCOL_VERSION } from "./protocol";
+import { decodeServerFrame, isChannelId, PROTOCOL_VERSION, UnsupportedChannelProtocolError } from "./protocol";
 import {
   ChannelEmitter, MAX_MESSAGE_LENGTH, uid,
   type ChannelConnectionState, type ChannelListener,
   type SendMessageInput, type ZakuraChannelClient,
 } from "./types";
+
+export interface ChannelNetworkStatus {
+  isOnline(): boolean;
+  subscribe(listener: (online: boolean) => void): () => void;
+}
 
 export interface LiveClientOptions {
   baseUrl: string;
@@ -30,9 +35,28 @@ export interface LiveClientOptions {
   acknowledgementTimeoutMs?: number;
   /** Wait for typing:false or a refusal before making Stop available again. */
   interruptTimeoutMs?: number;
+  /** Defaults to browser online/offline events; native clients use socket liveness. */
+  network?: ChannelNetworkStatus;
 }
 
 export const CLIENT_INFO = { name: "zakura-bot", version } as const;
+const NETWORK_OFFLINE = "Network offline. Reconnecting when your network is back.";
+
+function browserNetworkStatus(): ChannelNetworkStatus | undefined {
+  if (typeof window === "undefined" || typeof window.addEventListener !== "function" || typeof navigator === "undefined") return;
+  return {
+    isOnline: () => navigator.onLine !== false,
+    subscribe(listener) {
+      const update = () => listener(navigator.onLine !== false);
+      window.addEventListener("online", update);
+      window.addEventListener("offline", update);
+      return () => {
+        window.removeEventListener("online", update);
+        window.removeEventListener("offline", update);
+      };
+    },
+  };
+}
 
 function parseBaseUrl(baseUrl: string): URL {
   const url = new URL(baseUrl.trim());
@@ -94,8 +118,12 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   private sentMessages = new Map<string, SentMessage>();
   // At most one outstanding stop request per agent.
   private interrupts = new Map<string, { timer: Timer | null }>();
+  private network: ChannelNetworkStatus | undefined;
+  private unsubscribeNetwork: (() => void) | null = null;
 
-  constructor(private readonly opts: LiveClientOptions) {}
+  constructor(private readonly opts: LiveClientOptions) {
+    this.network = opts.network ?? browserNetworkStatus();
+  }
 
   getConnectionState(): ChannelConnectionState { return this.state; }
   subscribe(listener: ChannelListener): () => void { return this.emitter.subscribe(listener); }
@@ -112,15 +140,38 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     if (problem) { this.setState("error", problem); return; }
     this.closedByUser = false;
     this.attempt = 0;
+    this.observeNetwork();
     this.open();
+  }
+
+  private observeNetwork() {
+    if (!this.network || this.unsubscribeNetwork) return;
+    this.unsubscribeNetwork = this.network.subscribe((online) => {
+      if (this.closedByUser) return;
+      if (!online) {
+        // An error may precede an authorization close. Preserve that short
+        // grace period even if the browser also reports a network change.
+        if (!this.closeTimer) this.fail(NETWORK_OFFLINE, true);
+      } else if (!this.socket) {
+        this.cancelReconnect();
+        this.attempt = 0;
+        this.open();
+      }
+    });
+  }
+
+  private stopObservingNetwork() {
+    this.unsubscribeNetwork?.();
+    this.unsubscribeNetwork = null;
   }
 
   private open() {
     if (this.closedByUser || this.socket) return;
+    if (this.network?.isOnline() === false) { this.setState("error", NETWORK_OFFLINE); return; }
     const Impl = this.opts.WebSocketImpl ?? globalThis.WebSocket;
     if (!Impl) { this.fail("WebSocket is not available in this runtime.", false); return; }
     this.setState("connecting", this.attempt ? `Retry ${this.attempt}` : undefined);
-    if (this.closedByUser || this.socket) return;
+    if (this.closedByUser || this.socket || this.network?.isOnline() === false) return;
     let socket: WebSocket;
     try { socket = new Impl(zakuraSocketUrl(this.opts.baseUrl)); } catch {
       this.fail("Could not open the Zakura connection.", true);
@@ -169,20 +220,29 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   }
 
   private fail(detail: string, retry: boolean) {
+    this.cancelReconnect();
     this.releaseSocket();
-    if (!retry) this.closedByUser = true;
+    if (!retry) {
+      this.closedByUser = true;
+      this.stopObservingNetwork();
+    }
     this.setState("error", detail);
     if (retry) this.scheduleReconnect();
   }
 
   private scheduleReconnect() {
-    if (this.closedByUser || this.socket || this.reconnectTimer) return;
+    if (this.closedByUser || this.socket || this.reconnectTimer || this.network?.isOnline() === false) return;
     const delay = Math.min(this.opts.maxBackoffMs ?? 20_000, 1000 * 2 ** Math.min(this.attempt, 5));
     this.attempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.open();
     }, delay);
+  }
+
+  private cancelReconnect() {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 
   private startHeartbeat(socket: WebSocket) {
@@ -201,7 +261,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     const socket = this.socket;
     let frame;
     try { frame = decodeServerFrame(raw); } catch (error) {
-      this.emitter.emit({ type: "error", message: (error as Error).message });
+      if (error instanceof UnsupportedChannelProtocolError) this.fail(error.message, false);
+      else this.emitter.emit({ type: "error", message: (error as Error).message });
       return;
     }
     if (!frame) return;
@@ -225,10 +286,6 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     }
     if (frame.type === "ready") {
       if (this.state !== "connecting") return;
-      if (frame.protocol !== PROTOCOL_VERSION) {
-        this.fail("This server uses an unsupported channel protocol.", false);
-        return;
-      }
       if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
       this.handshakeTimer = null;
       this.attempt = 0;
@@ -381,8 +438,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
 
   disconnect(): void {
     this.closedByUser = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
+    this.stopObservingNetwork();
+    this.cancelReconnect();
     this.releaseSocket();
     this.setState("disconnected");
   }

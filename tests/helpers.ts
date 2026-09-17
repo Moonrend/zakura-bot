@@ -6,6 +6,25 @@ export const agents = [
   { id: "b", name: "Research", status: "idle" as const, color: "#38d591", unread: false },
 ];
 
+export function networkHarness(initialOnline = true) {
+  let online = initialOnline;
+  const listeners = new Set<(online: boolean) => void>();
+  return {
+    network: {
+      isOnline: () => online,
+      subscribe(listener: (online: boolean) => void) {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    },
+    listeners,
+    setOnline(value: boolean) {
+      online = value;
+      for (const listener of [...listeners]) listener(value);
+    },
+  };
+}
+
 export function liveHarness(options: Partial<LiveClientOptions> = {}) {
   const sockets: Socket[] = [];
   class Socket {

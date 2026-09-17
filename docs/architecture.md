@@ -117,7 +117,9 @@ Live client rules:
 - Roster updates contain the complete authorized list. Removal drops the conversation, draft, pending requests and local read marker. Offline status settles output and pending writes. Explicit live typing survives an ordinary roster refresh; an idle roster can clear a busy handshake snapshot when no live turn was observed.
 - Drop unknown event types; reject malformed / non-http attachment URLs.
 - Reconnect with backoff; treat close codes `1008` / `4401` / `4403` as auth/access failures (no retry).
+- Check the `ready` protocol version before decoding its roster. An unsupported version is terminal even if it uses a different roster schema.
 - Heartbeats send `ping` every 25 seconds and require `pong` within 10 seconds. Stale callbacks and request timers cannot act on replacement sockets.
+- Browser offline events immediately settle the connection and cancel heartbeat, delivery, interrupt and reconnect timers. Online events start a fresh handshake, retaining idempotency keys without resending. An initially offline browser waits for connectivity. Terminal failures and explicit disconnect remove network listeners; coming online cannot revive them. Native clients continue to use socket events and heartbeat liveness.
 
 Socket URL: `{base}/api/zakurabot/ws` (http→ws, https→wss; path prefixes retained).
 

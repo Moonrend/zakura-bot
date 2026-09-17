@@ -21,6 +21,8 @@ Talks to [Zakura](https://github.com/Moonrend/Zakura) as a messaging channel —
 
 Sending from the composer brings the transcript back to the latest messages; incoming replies preserve your position while reading history. Unsupported file drops cannot navigate away from any app route. Mixed image/text paste keeps the text and explains that the image was not uploaded.
 
+On web, losing network connectivity immediately pauses the live channel. Coming online starts a fresh handshake, preserves drafts, and leaves message retries manual. Connection setup remains scrollable in short windows; switching to the desktop sidebar closes the mobile drawer.
+
 ## Requirements
 
 - Node.js 20+ (tested on 22)
@@ -72,7 +74,7 @@ npx playwright install chromium  # first browser-test run
 npm run test:web
 ```
 
-Browser checks cover desktop/mobile layouts, IME input, keyboard focus/scrolling, reconnect retries, history replay, late interrupt refusal, mixed image/text paste, file drops outside the composer, and WCAG checks with axe. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
+Browser checks cover desktop/mobile layouts, IME input, keyboard focus/scrolling, network loss and recovery, reconnect retries, history replay, late interrupt refusal, mixed image/text paste, file drops outside the composer, and WCAG checks with axe. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
 
 
 ## CI / packaging
