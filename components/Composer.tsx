@@ -5,6 +5,7 @@ import { useStore } from "@/lib/store";
 import { MAX_MESSAGE_LENGTH } from "@/lib/channel";
 import { cn } from "@/lib/cn";
 import { containsFiles } from "@/lib/use-file-drop-guard";
+import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 
 export function Composer({ agentName, busy, deliveryPending = false, agentOffline = false, bottomInset = 0, onSubmit }: {
   agentName: string;
@@ -26,17 +27,16 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   const filePastePending = useRef(false);
   const inputRef = useRef<TextInput>(null);
   const actionRef = useRef<View | null>(null);
-  const setActionRef = useCallback((node: View | null) => {
-    // Changing Send/Stop removes the old control, including any held press.
-    // Move its keyboard focus to the draft before that DOM node disappears.
-    if (!node && Platform.OS === "web" && actionRef.current &&
-      document.activeElement === (actionRef.current as unknown as HTMLElement)) inputRef.current?.focus();
-    actionRef.current = node;
-  }, []);
   const offline = connection !== "connected" || agentOffline;
   const stopping = !!interrupting[selectedId];
   const sendingMessage = submitting || deliveryPending;
   const canSend = text.trim().length > 0 && !busy && !offline && !sendingMessage;
+  const focusDraft = useCallback(() => inputRef.current?.focus(), []);
+  const setActionRecoveryRef = useFocusOnRemoval(focusDraft);
+  const setActionRef = useCallback((node: View | null) => {
+    setActionRecoveryRef(node);
+    actionRef.current = node;
+  }, [setActionRecoveryRef]);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;

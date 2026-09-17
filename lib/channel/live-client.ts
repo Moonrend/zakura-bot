@@ -41,6 +41,7 @@ export interface LiveClientOptions {
 
 export const CLIENT_INFO = { name: "zakura-bot", version } as const;
 const NETWORK_OFFLINE = "Network offline. Reconnecting when your network is back.";
+const BACKOFF_RESET_MS = 60_000;
 
 function browserNetworkStatus(): ChannelNetworkStatus | undefined {
   if (typeof window === "undefined" || typeof window.addEventListener !== "function" || typeof navigator === "undefined") return;
@@ -111,6 +112,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   private reconnectTimer: Timer | null = null;
   private handshakeTimer: Timer | null = null;
   private closeTimer: Timer | null = null;
+  private backoffResetTimer: Timer | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private pongTimer: Timer | null = null;
   private roster = new Map<string, Agent["status"]>();
@@ -270,6 +272,17 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.reconnectTimer = null;
   }
 
+  private resetBackoffWhenStable(socket: WebSocket) {
+    if (!this.attempt || this.backoffResetTimer || this.socket !== socket || this.state !== "connected") return;
+    // A ready followed by another failure is still part of the same outage.
+    // Give heartbeats time to detect an unresponsive authenticated connection.
+    this.backoffResetTimer = setTimeout(() => {
+      if (this.socket !== socket || this.state !== "connected") return;
+      this.backoffResetTimer = null;
+      this.attempt = 0;
+    }, BACKOFF_RESET_MS);
+  }
+
   private startHeartbeat(socket: WebSocket) {
     const interval = this.opts.heartbeatMs ?? 25_000;
     if (interval <= 0 || this.heartbeatTimer || this.socket !== socket || this.state !== "connected") return;
@@ -326,13 +339,15 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       if (this.state !== "connecting") return;
       if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
       this.handshakeTimer = null;
-      this.attempt = 0;
       this.updateRoster(frame.agents);
       // Subscribers can disconnect, replace the client, or put this same socket
       // into close grace. Only the still-pending handshake can become ready.
       if (this.socket !== socket || this.closedByUser || this.state !== "connecting") return;
       this.setState("connected", "zakurabot");
-      if (socket) this.startHeartbeat(socket);
+      if (socket) {
+        this.resetBackoffWhenStable(socket);
+        this.startHeartbeat(socket);
+      }
       return;
     }
     // Do not accept data before the authenticated roster arrives.
@@ -543,7 +558,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.pongTimer) clearTimeout(this.pongTimer);
     if (this.closeTimer) clearTimeout(this.closeTimer);
-    this.handshakeTimer = this.heartbeatTimer = this.pongTimer = this.closeTimer = null;
+    if (this.backoffResetTimer) clearTimeout(this.backoffResetTimer);
+    this.handshakeTimer = this.heartbeatTimer = this.pongTimer = this.closeTimer = this.backoffResetTimer = null;
   }
 
   private clearRequestTimers() {

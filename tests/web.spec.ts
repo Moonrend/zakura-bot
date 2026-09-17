@@ -16,6 +16,67 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("disabling focused conversation controls preserves navigation and the next draft", async ({ page, context }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      if (frame.type === "send") socket.send(JSON.stringify({ type: "error", agentId: "live",
+        clientMessageId: frame.clientMessageId, message: "Delivery rejected; try again later" }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false,
+  })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  const transcript = page.getByTestId("chat-transcript");
+  const send = page.getByRole("button", { name: "Send message", exact: true });
+  const suggestion = page.getByRole("button", { name: "Say hello", exact: true });
+  await input.fill("Keep this draft while offline");
+  await suggestion.focus();
+  await context.setOffline(true);
+  await expect(suggestion).toBeDisabled();
+  await expect(transcript).toBeFocused();
+  await expect(input).toHaveValue("Keep this draft while offline");
+  await context.setOffline(false);
+  await expect(send).toBeEnabled();
+
+  await send.focus();
+  channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "offline" }] }));
+  await expect(send).toBeDisabled();
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this draft while offline");
+  channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "idle" }] }));
+  await expect(send).toBeEnabled();
+  await expect(input).toBeFocused();
+  await input.press("Enter");
+  const retry = page.getByRole("button", { name: "Retry failed message", exact: true });
+  await expect(retry).toBeEnabled();
+  await input.fill("Keep the next draft during the reply");
+  await retry.focus();
+  channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: true }));
+  await expect(retry).toBeDisabled();
+  await expect(transcript).toBeFocused();
+
+  // Availability changes in the background must not take the draft's focus.
+  await input.focus();
+  channel!.send(JSON.stringify({ type: "typing", agentId: "live", active: false }));
+  await expect(retry).toBeEnabled();
+  await expect(input).toBeFocused();
+  await context.setOffline(true);
+  await expect(retry).toBeDisabled();
+  await expect(input).toBeFocused();
+  await context.setOffline(false);
+  await expect(retry).toBeEnabled();
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep the next draft during the reply");
+  await accessible(page);
+});
+
 test("tool updates that remove details preserve transcript navigation and leave focused drafts alone", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {

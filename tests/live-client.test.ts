@@ -5,6 +5,85 @@ import { decodeServerFrame } from "../lib/channel/protocol";
 import { chatReducer, emptyChatState, isAgentWorking } from "../lib/chat-state";
 import { agents, liveHarness, networkHarness } from "./helpers";
 
+test("brief authenticated reconnects retain capped backoff and never resend pending messages", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets } = liveHarness({ maxBackoffMs: 5000 });
+  let state = emptyChatState();
+  client.subscribe((event) => { state = chatReducer(state, event); });
+  t.after(() => client.disconnect());
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  const user = { id: "pending", agentId: "a", role: "user" as const, kind: "text" as const,
+    text: "Keep the retry identity", createdAt: 1 };
+  state = chatReducer(state, { type: "optimistic", message: user });
+  state = chatReducer(state, { type: "draft", agentId: "a", text: "Keep the next draft" });
+  await client.sendMessage({ agentId: "a", clientMessageId: user.id, text: user.text, localCreatedAt: user.createdAt });
+
+  for (const delay of [1000, 2000, 4000, 5000, 5000]) {
+    sockets.at(-1)!.remoteClose(1011);
+    const count = sockets.length;
+    t.mock.timers.tick(delay - 1);
+    assert.equal(sockets.length, count, `an unstable ready must not shorten the ${delay}ms backoff`);
+    t.mock.timers.tick(1);
+    assert.equal(sockets.length, count + 1);
+    const socket = sockets.at(-1)!;
+    socket.open(); socket.ready();
+    assert.equal(state.connection, "connected");
+    assert.deepEqual(socket.sent.map((frame) => frame.type), ["hello"]);
+    assert.equal(state.messagesByAgent.a[0].failed, true);
+    assert.equal(state.draftsByAgent.a, "Keep the next draft");
+  }
+
+  await client.sendMessage({ agentId: "a", clientMessageId: user.id, text: user.text });
+  assert.deepEqual(sockets.at(-1)!.sent.at(-1), sockets[0].sent.at(-1), "manual retry retains the original id and body");
+  sockets.at(-1)!.frame({ type: "message", message: { ...user, clientMessageId: user.id } });
+  assert.equal(state.messagesByAgent.a[0].failed, false);
+  assert.equal(state.messagesByAgent.a.length, 1);
+});
+
+test("backoff resets only after sustained readiness and an old socket cannot reset its replacement", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets } = liveHarness();
+  t.after(() => client.disconnect());
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  const reconnectAfter = (delay: number) => {
+    sockets.at(-1)!.remoteClose(1006);
+    const count = sockets.length;
+    t.mock.timers.tick(delay - 1);
+    assert.equal(sockets.length, count);
+    t.mock.timers.tick(1);
+    assert.equal(sockets.length, count + 1);
+    sockets.at(-1)!.open(); sockets.at(-1)!.ready();
+  };
+  reconnectAfter(1000);
+  t.mock.timers.tick(30_000);
+  reconnectAfter(2000);
+  // The preceding socket's one-minute stability window has now elapsed,
+  // but this connection has been ready for less than a minute.
+  t.mock.timers.tick(30_000);
+  reconnectAfter(4000);
+  t.mock.timers.tick(60_000);
+  reconnectAfter(1000);
+});
+
+test("ready connections that miss their first heartbeat retain the outage backoff", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets } = liveHarness({ heartbeatMs: 25_000, pongTimeoutMs: 10_000 });
+  t.after(() => client.disconnect());
+  await client.connect(); sockets[0].open(); sockets[0].ready();
+  for (const delay of [1000, 2000, 4000]) {
+    t.mock.timers.tick(25_000);
+    assert.equal(sockets.at(-1)!.sent.at(-1)?.type, "ping");
+    t.mock.timers.tick(10_000);
+    assert.equal(client.getConnectionState(), "error");
+    const count = sockets.length;
+    t.mock.timers.tick(delay - 1);
+    assert.equal(sockets.length, count, "readiness alone cannot recover a connection that never answers a ping");
+    t.mock.timers.tick(1);
+    assert.equal(sockets.length, count + 1);
+    sockets.at(-1)!.open(); sockets.at(-1)!.ready();
+  }
+});
+
 test("authenticated reconnect clears channel diagnostics but retains conversation failures and drafts", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   for (const recovery of ["automatic", "manual"] as const) {

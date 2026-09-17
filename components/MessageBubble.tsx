@@ -1,9 +1,9 @@
-import { useCallback, useRef } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { AlertCircle, RotateCcw } from "lucide-react-native";
 import type { ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { formatTime } from "@/lib/store";
+import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { ActivityChip } from "./ActivityChip";
 import { ReplyContent } from "./ReplyContent";
 
@@ -19,14 +19,7 @@ type Props = {
 };
 
 export function MessageBubble({ message, replyTarget, onRetry, onFocusLost, retryDisabled, grouped, reducedMotion, onExpandDetails }: Props) {
-  const retryRef = useRef<View | null>(null);
-  const setRetryRef = useCallback((node: View | null) => {
-    // A retry or a late receipt removes this control. Keep keyboard navigation
-    // in the transcript when it owns focus, without moving other readers.
-    if (!node && Platform.OS === "web" && retryRef.current &&
-      document.activeElement === (retryRef.current as unknown as HTMLElement)) onFocusLost?.();
-    retryRef.current = node;
-  }, [onFocusLost]);
+  const setRetryRef = useFocusOnRemoval(onFocusLost);
   if (message.kind === "activity" && message.tool) return <ActivityChip tool={message.tool} reducedMotion={reducedMotion}
     onExpand={onExpandDetails} onFocusLost={onFocusLost} />;
   if (message.kind === "system") return <View className="my-2 min-w-0 items-center"><Text testID="message-text"
