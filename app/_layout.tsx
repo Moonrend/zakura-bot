@@ -3,14 +3,22 @@ import { useEffect, useState } from "react";
 import { Stack } from "expo-router";
 import Head from "expo-router/head";
 import { StatusBar } from "expo-status-bar";
+import * as SplashScreen from "expo-splash-screen";
 import { Platform, View, useWindowDimensions } from "react-native";
 import { StoreProvider } from "@/lib/store";
 import { useFileDropGuard } from "@/lib/use-file-drop-guard";
+
+// Native splash stays up until hideAsync (expo-splash-screen plugin).
+void SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
   useFileDropGuard();
   const { height } = useWindowDimensions();
   const [webViewportHeight, setWebViewportHeight] = useState<number>();
+  useEffect(() => {
+    // Do not wait on settings/fonts — otherwise Android stays on the launch screen.
+    void SplashScreen.hideAsync().catch(() => {});
+  }, []);
   useEffect(() => {
     // Mobile keyboards can shrink visualViewport without changing the page's
     // percentage height. RN Web dimensions account for that and for pinch zoom.
