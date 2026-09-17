@@ -81,12 +81,13 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = null;
       if (!pinnedRef.current) return;
+      const node = Platform.OS === "web" ? scrollRef.current?.getScrollableNode() as HTMLElement | undefined : undefined;
+      if (Platform.OS === "web" ? !node?.clientHeight : viewportHeight.current <= 0) return;
       const animate = animated && !reducedMotionRef.current;
       scrollRef.current?.scrollToEnd({ animated: animate });
       if (Platform.OS === "web" && !animate) {
         // RN Web throttles scroll events. Record an immediate follow scroll
         // before a quick upward wheel gesture can be compared to the old y.
-        const node = scrollRef.current?.getScrollableNode() as HTMLElement | undefined;
         if (node) lastScrollY.current = node.scrollTop;
       }
     });
@@ -130,12 +131,17 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     // (for example, shortening a draft). Use current web geometry so concurrent
     // text wrapping and throttled scroll events cannot leave stale distances.
     const node = Platform.OS === "web" ? scrollRef.current?.getScrollableNode() as HTMLElement | undefined : undefined;
+    // Navigation keeps the chat mounted but reports zero geometry while it
+    // is hidden. That is not the end of the transcript; retain reading state
+    // until a visible layout can decide whether following should resume.
+    if (Platform.OS === "web" ? !node?.clientHeight : viewportHeight.current <= 0) return;
     const distance = node ? node.scrollHeight - node.clientHeight - node.scrollTop
       : contentHeight.current - viewportHeight.current - lastScrollY.current;
     if (pinnedRef.current || distance < 80) pinToLatest();
   }, [pinToLatest]);
 
   const onContentSizeChange = useCallback((_width: number, height: number) => {
+    if (height <= 0) return;
     contentHeight.current = height;
     const anchor = historyAnchor.current;
     if (Platform.OS !== "web" && anchor?.agentId === selectedId) {
@@ -183,6 +189,8 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
 
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    if (layoutMeasurement.height <= 0 || (Platform.OS === "web" &&
+      !(scrollRef.current?.getScrollableNode() as HTMLElement | undefined)?.clientHeight)) return;
     const distance = contentSize.height - layoutMeasurement.height - contentOffset.y;
     // Growing content must not be mistaken for the user scrolling upwards.
     const next = readingSelection.current ? false : distance < 80 ? true : contentOffset.y < lastScrollY.current - 1 ? false : pinnedRef.current;

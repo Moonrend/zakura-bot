@@ -16,6 +16,67 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+for (const width of [1440, 320]) test(`settings preserves the transcript reading position while replies arrive offscreen (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      for (let index = 0; index < 70; index++) socket.send(JSON.stringify({ type: "chat_reply", agentId: "live",
+        messageId: `history-${index}`, createdAt: index, payload: { text: `Reply ${index}. ${"Readable history. ".repeat(15)}` } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false,
+  })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep this next draft");
+  const transcript = page.getByTestId("chat-transcript");
+  const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
+  await expect(page.getByTestId("message-history-69")).toBeVisible();
+  await transcript.press("Home");
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+  await transcript.evaluate((element) => { element.scrollTop = 420; });
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(420);
+  await expect(jump).toBeVisible();
+
+  const menu = page.getByRole("button", { name: "Open agent list", exact: true });
+  const settings = page.getByRole("button", { name: "Open settings", exact: true });
+  for (const following of [false, true]) {
+    if (following) {
+      await jump.press("Enter");
+      await expect(jump).toHaveCount(0);
+    }
+    if (width < 768) await menu.press("Enter");
+    await settings.press("Enter");
+    await expect(page.getByRole("heading", { name: "Your connection", exact: true })).toBeFocused();
+    await expect.poll(() => transcript.evaluate((element) => element.clientHeight)).toBe(0);
+    const messageId = `offscreen-${following}`;
+    channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId, createdAt: following ? 81 : 80,
+      streaming: true, payload: { text: "A reply arriving while settings is open. " } }));
+    channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId, delta: "More content. ".repeat(30) }));
+    channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId }));
+    await expect(page.getByTestId(`message-${messageId}`)).toHaveCount(1);
+    if (following) await page.goBack();
+    else await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
+    await expect(width < 768 ? menu : settings).toBeFocused();
+    await expect(input).toHaveValue("Keep this next draft");
+    // Reading retains the same mounted page; following still catches up on return.
+    await expect(page.getByTestId("message-history-20")).toHaveCount(1);
+    if (following) {
+      await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(2);
+      await expect(jump).toHaveCount(0);
+    } else {
+      await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(420);
+      await expect(jump).toBeVisible();
+    }
+  }
+  await noOverflow(page);
+});
+
 for (const width of [320, 1024]) test(`unsupported uploads keep their explanation and channel recovery reachable in short windows (${width}px)`, async ({ page }) => {
   await page.setViewportSize({ width, height: 220 });
   let channel: WebSocketRoute | undefined;
