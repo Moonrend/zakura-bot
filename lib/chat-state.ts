@@ -1,5 +1,6 @@
 import type { Agent, ChatMessage } from "./types";
 import type { ChannelConnectionState, ChannelEvent } from "./channel/types";
+import { messageContentPreview } from "./message-preview";
 
 export interface ChannelError {
   message: string;
@@ -63,10 +64,8 @@ export function previewFromMessages(messages: ChatMessage[]): string | undefined
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (!visibleContent(message)) continue;
-    const text = message.text?.trim() || message.card?.title?.trim() || message.card?.text?.trim() || message.card?.subtitle?.trim() ||
-      message.attachments?.[0]?.name || (message.attachments?.length ? "Attachment" : undefined) ||
-      message.actions?.[0]?.label || "Card";
-    return `${message.failed ? "Not sent · " : message.pending ? "Sending · " : message.role === "user" ? "You: " : ""}${text.replace(/\s+/g, " ")}`;
+    const text = messageContentPreview(message);
+    if (text) return `${message.failed ? "Not sent · " : message.pending ? "Sending · " : message.role === "user" ? "You: " : ""}${text}`;
   }
 }
 

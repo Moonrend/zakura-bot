@@ -2,14 +2,10 @@ import { useCallback } from "react";
 import { Platform, ScrollView, Text, View } from "react-native";
 import { Paperclip } from "lucide-react-native";
 import type { ChatMessage, MessageLink } from "@/lib/types";
+import { attachmentLabel, messageContentPreview } from "@/lib/message-preview";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { ExternalLink } from "./ExternalLink";
 import { RichText } from "./RichText";
-
-function filename(url: string): string {
-  try { return decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "") || "Attachment"; }
-  catch { return "Attachment"; }
-}
 
 function keyedLinks(links: MessageLink[]) {
   const counts = new Map<string, number>();
@@ -38,8 +34,8 @@ export function ReplyContent({ message, replyTarget, onFocusLost }: {
     card.table?.headers.some((cell) => cell.trim()) || card.table?.rows.some((row) => row.some((cell) => cell.trim())));
   const links = [...(message.actions ?? []), ...(card?.links ?? [])];
   const images = [...(card?.images ?? []), ...(card?.imageUrl ? [{ url: card.imageUrl, alt: "Card image" }] : [])];
-  const files = (message.attachments ?? []).map((file) => ({ url: file.url, label: file.name || filename(file.url) }));
-  const quote = replyTarget?.text?.trim() || replyTarget?.card?.title || replyTarget?.attachments?.[0]?.name || "Earlier message";
+  const files = (message.attachments ?? []).map((file) => ({ url: file.url, label: attachmentLabel(file) }));
+  const quote = replyTarget ? messageContentPreview(replyTarget) ?? "Earlier message" : undefined;
   const hasText = !!message.text?.trim();
   const empty = !hasText && !card && !message.attachments?.length && !links.length;
   return (

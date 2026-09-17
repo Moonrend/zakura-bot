@@ -16,6 +16,49 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("quotes resolve late history in their own conversation and summarize card, file and action replies", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }, { id: "other", name: "Other", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep the next draft");
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "other", messageId: "reference", createdAt: 1,
+    payload: { text: "A different conversation's result" } }));
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "followup", createdAt: 2,
+    payload: { text: "About the previous result", reply_to: "reference" } }));
+  const quote = page.getByTestId("message-followup");
+  await expect(quote).toContainText("Reply to earlier message");
+  await expect(quote).not.toContainText("A different conversation's result");
+
+  const cases = [
+    { payload: { card: { title: " \n ", text: "Read the card body", subtitle: "Card subtitle" } }, summary: "Read the card body" },
+    { payload: { card: { subtitle: "A card with only a subtitle" } }, summary: "A card with only a subtitle" },
+    { payload: { attachments: [{ url: "https://example.com/report%20final.pdf?signature=a%2Bb", name: " \t " }] }, summary: "report final.pdf" },
+    { payload: { attachments: [{ url: "https://example.com/%20%20", name: "" }] }, summary: "Attachment" },
+    { payload: { actions: [{ url: "https://example.com/report", label: "Review the report" }] }, summary: "Review the report" },
+    { payload: { card: { links: [{ url: "https://example.com/details", label: "Open the card details" }] } }, summary: "Open the card details" },
+    { payload: { card: { fields: [{ label: "Status", value: "Ready" }] } }, summary: "Card" },
+  ];
+  for (const { payload, summary } of cases) {
+    channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "reference", createdAt: 1, payload }));
+    await expect(quote).toContainText("Reply to agent");
+    await expect(quote.getByText(summary, { exact: true })).toBeVisible();
+    await expect(quote).not.toContainText("Earlier message");
+    await expect(quote.getByRole("link")).toHaveCount(0);
+    await expect(input).toHaveValue("Keep the next draft");
+  }
+  await noOverflow(page);
+  await accessible(page);
+});
+
 test("a Stop click racing a terminal frame cannot restart the waiting state or discard the next draft", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   let interrupts = 0;
