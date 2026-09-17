@@ -10,6 +10,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   android-apk:
     runs-on: ubuntu-latest
@@ -89,10 +93,14 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Belt-and-suspenders with gradle.properties — Metaspace OOM shows up on RMI idle threads.
+          GRADLE_OPTS: -Xmx3g -XX:MaxMetaspaceSize=1g -Dorg.gradle.daemon=false
+          JAVA_TOOL_OPTIONS: -XX:MaxMetaspaceSize=1g
         run: |
           set -euo pipefail
           # Always assembleRelease so Metro is not required on device.
-          GRADLE_ARGS=(assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --stacktrace)
+          # --no-parallel / max-workers: cut Kotlin+AGP Metaspace pressure on 7GB runners.
+          GRADLE_ARGS=(assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --no-parallel --max-workers=2 --stacktrace)
           if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
             echo "Release signing secrets present — configuring upload keystore."
             mkdir -p keystores
