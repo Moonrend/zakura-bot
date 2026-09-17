@@ -5,6 +5,34 @@ import { decodeServerFrame } from "../lib/channel/protocol";
 import { chatReducer, emptyChatState, isAgentWorking } from "../lib/chat-state";
 import { agents, liveHarness, networkHarness } from "./helpers";
 
+test("a late delivery failure and its retry cannot erase a separate turn failure", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets } = liveHarness();
+  let state = emptyChatState();
+  client.subscribe((event) => { state = chatReducer(state, event); });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  const old = { id: "old", agentId: "a", role: "user" as const, kind: "text" as const, text: "old", createdAt: 1 };
+  state = chatReducer(state, { type: "optimistic", message: old });
+  await client.sendMessage({ agentId: "a", clientMessageId: "old", text: "old", localCreatedAt: 1 });
+  socket.frame({ type: "message", message: { ...old, id: "current", text: "current", createdAt: 2 } });
+  socket.frame({ type: "chat_reply", agentId: "a", messageId: "reply", createdAt: 3, streaming: true, payload: { text: "Partial reply" } });
+  await client.interrupt("a");
+  socket.frame({ type: "error", agentId: "a", clientMessageId: "current", turnEnded: true, message: "Current run failed" });
+  socket.frame({ type: "error", agentId: "a", clientMessageId: "old", turnEnded: true, message: "Old delivery failed" });
+  assert.deepEqual(state.errors.map((error) => [error.message, !!error.turnEnded]),
+    [["Current run failed", true], ["Old delivery failed", false]]);
+  assert.equal(isAgentWorking(state, "a"), false);
+  assert.equal(state.interrupting.a, false);
+  state = chatReducer(state, { type: "optimistic", message: old });
+  assert.deepEqual(state.errors.map((error) => error.message), ["Current run failed"]);
+  await client.sendMessage({ agentId: "a", clientMessageId: "old", text: "old", localCreatedAt: 1 });
+  socket.frame({ type: "message", message: { ...old, id: "server-old", clientMessageId: "old" } });
+  assert.equal(state.messagesByAgent.a[0].failed, false);
+  assert.deepEqual(state.errors.map((error) => error.message), ["Current run failed"]);
+  assert.equal(socket.sent.filter((frame) => frame.type === "send").length, 2);
+});
+
 test("a Stop settled or revoked by a progress listener is never written to the socket", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   for (const reason of ["finished", "offline", "removed"] as const) {

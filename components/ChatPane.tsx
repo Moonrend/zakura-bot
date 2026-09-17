@@ -38,6 +38,7 @@ export function ChatPane() {
     }
   }, []);
   const setConversationRef = useFocusOnRemoval(focusTranscript);
+  const setJumpRef = useFocusOnRemoval(focusTranscript);
 
   const scrollToLatest = useCallback((animated = false) => {
     if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
@@ -142,7 +143,7 @@ export function ChatPane() {
                 <TypingDots reducedMotion={reducedMotion} /><Text className="min-w-0 flex-1 text-[12px] text-ink-secondary" numberOfLines={1}>{agent.name} is working…</Text>
               </View> : null}
             </ScrollView>
-            {!pinned ? <Pressable onPress={() => {
+            {!pinned ? <Pressable ref={setJumpRef} onPress={() => {
               pinToLatest(true);
               // The button disappears after activation. Keep keyboard navigation
               // in the transcript instead of letting focus fall back to the page.

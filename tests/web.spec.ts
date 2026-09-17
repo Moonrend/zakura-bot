@@ -16,6 +16,77 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("streaming code fences preserve embedded backticks and complete links keep balanced parentheses", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep this draft");
+  const source = "const marker = '```';\n";
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "code", createdAt: 1,
+    streaming: true, payload: { text: "```js\n" + source } }));
+  const reply = page.getByTestId("message-code");
+  await expect(reply.getByTestId("message-text")).toHaveCount(1);
+  await expect(reply.getByTestId("message-text")).toHaveText(source);
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "code",
+    delta: "const url = '[Code](https://example.com)';\n```\n[Guide](https://example.com/guide_(one)?q=(two))" }));
+  await expect(reply.getByTestId("message-text").first()).toHaveText(source + "const url = '[Code](https://example.com)';");
+  const link = page.getByRole("link", { name: "Guide, opens in browser", exact: true });
+  await expect(link).toHaveAttribute("href", "https://example.com/guide_(one)?q=(two)");
+  await expect(page.getByRole("link", { name: "Code, opens in browser", exact: true })).toHaveCount(0);
+  channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "code" }));
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep this draft");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await link.focus();
+  await expect(link).toBeFocused();
+  await noOverflow(page);
+  await accessible(page);
+});
+
+test("late receipts clear delivery failures without hiding a separate run error or disturbing the draft", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  let sent: { clientMessageId: string; text: string } | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      const frame = JSON.parse(String(raw));
+      if (frame.type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      if (frame.type === "send") sent = frame;
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Earlier unconfirmed message");
+  await input.press("Enter");
+  await expect.poll(() => sent?.text).toBe("Earlier unconfirmed message");
+  await input.fill("Keep the next draft");
+  channel!.send(JSON.stringify({ type: "message", message: { id: "current", agentId: "live", role: "user", kind: "text",
+    text: "A newer turn", createdAt: Date.now() + 1000 } }));
+  channel!.send(JSON.stringify({ type: "error", agentId: "live", clientMessageId: "current", turnEnded: true, message: "Current run failed" }));
+  await expect(page.getByRole("alert")).toContainText("Current run failed");
+  channel!.send(JSON.stringify({ type: "error", agentId: "live", clientMessageId: sent!.clientMessageId, message: "Earlier delivery failed" }));
+  await expect(page.getByRole("alert")).toContainText("Earlier delivery failed");
+  channel!.send(JSON.stringify({ type: "message", message: { id: "server-old", clientMessageId: sent!.clientMessageId,
+    agentId: "live", role: "user", kind: "text", text: sent!.text, createdAt: 1 } }));
+  await expect(page.getByRole("button", { name: "Retry failed message", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("alert")).toContainText("Current run failed");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep the next draft");
+  await page.getByRole("button", { name: "Dismiss error", exact: true }).press("Enter");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByTestId("chat-transcript")).toBeFocused();
+});
+
 test("roster revocation and changing search matches keep keyboard focus in the agent list", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   const roster = [{ id: "alpha", name: "Alpha", status: "idle" }, { id: "beta", name: "Beta", status: "idle" }];
@@ -712,6 +783,14 @@ test("reading older messages ignores incoming replies, while sending returns to 
   await transcript.hover();
   await page.mouse.wheel(0, -700);
   await expect(page.getByRole("button", { name: "Jump to latest", exact: true })).toBeVisible();
+  // Reaching the bottom with the wheel also removes the focused jump control.
+  await jump.focus();
+  await transcript.hover();
+  await page.mouse.wheel(0, 2000);
+  await expect(jump).toHaveCount(0);
+  await expect(transcript).toBeFocused();
+  await page.mouse.wheel(0, -700);
+  await expect(jump).toBeVisible();
   const input = page.getByRole("textbox", { name: "Message Live", exact: true });
   await input.fill("My next message");
   await input.press("Enter");

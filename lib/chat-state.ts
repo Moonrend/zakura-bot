@@ -196,8 +196,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
     case "optimistic": {
       if (!state.agents.some((agent) => agent.id === action.message.agentId)) return state;
+      const previous = state.messagesByAgent[action.message.agentId]?.find((message) => message.id === action.message.id);
       const next = putMessage(state, { ...action.message, pending: true, failed: false });
-      return { ...next, errors: next.errors.filter((error) => error.agentId !== action.message.agentId) };
+      // A retry can return only a receipt. It cannot resolve a failed run or
+      // another message's delivery; a new message starts recovery.
+      const aliases = previous ? [previous.id, previous.clientMessageId, previous.serverId] : [];
+      return { ...next, errors: next.errors.filter((error) => error.agentId !== action.message.agentId ||
+        (previous && (error.turnEnded || error.clientMessageId === undefined || !aliases.includes(error.clientMessageId)))) };
     }
     case "message":
       return putMessage(state, action.message.role === "user" ? { ...action.message, pending: false, failed: false } : action.message);
@@ -243,7 +248,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       } else if (action.agentId && turnEnded) next = endTurn(state, action.agentId);
       const error: ChannelError = { message: action.message, agentId: action.agentId, clientMessageId: action.clientMessageId,
         ...(turnEnded ? { turnEnded: true } : {}) };
-      return { ...next, errors: [...next.errors.filter((item) => item.agentId !== action.agentId), error] };
+      return { ...next, errors: [...next.errors.filter((item) => item.agentId !== error.agentId ||
+        item.clientMessageId !== error.clientMessageId || !!item.turnEnded !== turnEnded), error] };
     }
   }
 }

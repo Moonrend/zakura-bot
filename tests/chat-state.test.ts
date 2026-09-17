@@ -12,6 +12,28 @@ function initial() {
 const reply = (id: string, agentId = "a", text = "Hello", createdAt = 10): ChatMessage =>
   ({ id, agentId, role: "assistant", kind: "text", text, createdAt });
 
+test("receipts and retries resolve only their delivery error, retaining turn failures until dismissed", () => {
+  let state = initial();
+  const user: ChatMessage = { id: "local", agentId: "a", role: "user", kind: "text", text: "Hello", createdAt: 1 };
+  state = chatReducer(state, { type: "draft", agentId: "a", text: "Next draft" });
+  state = chatReducer(state, { type: "optimistic", message: user });
+  const failure = { type: "error" as const, agentId: "a", clientMessageId: "local", turnEnded: true, message: "Run failed" };
+  state = chatReducer(state, failure);
+  state = chatReducer(state, failure);
+  assert.equal(state.errors.length, 1, "repeated failures in the same scope are deduplicated");
+  state = chatReducer(state, { type: "error", agentId: "a", clientMessageId: "local", message: "Delivery not confirmed" });
+  assert.equal(state.errors.length, 2, "delivery and execution have independent recovery");
+  state = chatReducer(state, { type: "optimistic", message: user });
+  assert.deepEqual(state.errors.map((error) => error.message), ["Run failed"]);
+  state = chatReducer(state, { type: "message", message: { ...user, id: "server", clientMessageId: "local" } });
+  assert.equal(state.messagesByAgent.a.length, 1);
+  assert.equal(state.messagesByAgent.a[0].failed, false);
+  assert.equal(state.errors[0].turnEnded, true);
+  assert.equal(state.draftsByAgent.a, "Next draft");
+  state = chatReducer(state, { type: "dismiss_error", error: state.errors[0] });
+  assert.equal(state.errors.length, 0);
+});
+
 test("an older unconfirmed turn error becomes a delivery error that a late receipt can clear", () => {
   let state = initial();
   const user = (id: string, createdAt: number): ChatMessage =>
