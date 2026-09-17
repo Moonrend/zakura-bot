@@ -36,6 +36,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   reducedMotionRef.current = reducedMotion;
   const [pinned, setPinned] = useState(true);
   const pinnedRef = useRef(true);
+  const readingSelection = useRef(false);
   const lastScrollY = useRef(0);
   const viewportHeight = useRef(0);
   const contentHeight = useRef(0);
@@ -86,6 +87,9 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   }, []);
 
   const pinToLatest = useCallback((animated = false) => {
+    // Sending or explicitly jumping to the end resumes following even if a
+    // keyboard action left the old text selection in place.
+    readingSelection.current = false;
     pinnedRef.current = true;
     setPinned(true);
     scrollToLatest(animated);
@@ -115,6 +119,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   }, [selectedId, pauseFollowing]);
 
   const followIfNearEnd = useCallback(() => {
+    if (readingSelection.current) return;
     // Layout can grow the viewport without changing content or scroll offset
     // (for example, shortening a draft). Use current web geometry so concurrent
     // text wrapping and throttled scroll events cannot leave stale distances.
@@ -139,6 +144,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   }, [followIfNearEnd, selectedId]);
 
   useEffect(() => {
+    readingSelection.current = false;
     pinnedRef.current = true;
     lastScrollY.current = 0;
     historyAnchor.current = null;
@@ -149,11 +155,30 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   }, [selectedId, scrollToLatest]);
   useEffect(() => () => { if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current); }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || !selectedId) return;
+    const node = scrollRef.current?.getScrollableNode() as HTMLElement | undefined;
+    const selectionChange = () => {
+      const selection = window.getSelection();
+      const reading = !!node && !!selection && !selection.isCollapsed && selection.rangeCount > 0 &&
+        selection.getRangeAt(0).intersectsNode(node);
+      if (reading === readingSelection.current) return;
+      readingSelection.current = reading;
+      if (reading) pauseFollowing();
+      else followIfNearEnd();
+    };
+    // Selecting text is a reading action even without an upward scroll. Keep
+    // small updates and delayed scroll events from resuming follow mid-copy.
+    document.addEventListener("selectionchange", selectionChange);
+    selectionChange();
+    return () => document.removeEventListener("selectionchange", selectionChange);
+  }, [selectedId, pauseFollowing, followIfNearEnd]);
+
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distance = contentSize.height - layoutMeasurement.height - contentOffset.y;
     // Growing content must not be mistaken for the user scrolling upwards.
-    const next = distance < 80 ? true : contentOffset.y < lastScrollY.current - 1 ? false : pinnedRef.current;
+    const next = readingSelection.current ? false : distance < 80 ? true : contentOffset.y < lastScrollY.current - 1 ? false : pinnedRef.current;
     lastScrollY.current = contentOffset.y;
     if (pinnedRef.current !== next) {
       if (!next) keepVisibleHistory();

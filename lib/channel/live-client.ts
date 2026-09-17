@@ -9,7 +9,7 @@
  */
 import { version } from "../../package.json";
 import type { Agent, ChatMessage } from "../types";
-import { decodeServerFrame, InvalidChannelFrameError, isChannelId, PROTOCOL_VERSION, UnsupportedChannelProtocolError } from "./protocol";
+import { channelCloseFailure, decodeServerFrame, InvalidChannelFrameError, isChannelId, PROTOCOL_VERSION, UnsupportedChannelProtocolError } from "./protocol";
 import {
   ChannelEmitter, MAX_MESSAGE_LENGTH, uid,
   type ChannelConnectionState, type ChannelListener,
@@ -214,11 +214,8 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     };
     socket.onclose = (event) => {
       if (!current()) return;
-      const authFailure = [1008, 4401, 4403].includes(event.code);
-      const detail = event.code === 4401 ? "Authentication failed. Check your token in Settings."
-        : event.code === 4403 || event.code === 1008 ? "Channel access denied. Check your binding and token."
-          : `Connection closed (${event.code}). Reconnecting…`;
-      this.fail(detail, !authFailure);
+      const failure = channelCloseFailure(event.code);
+      this.fail(failure.detail, failure.retry);
     };
   }
 

@@ -5,6 +5,53 @@ import { decodeServerFrame } from "../lib/channel/protocol";
 import { chatReducer, emptyChatState, isAgentWorking } from "../lib/chat-state";
 import { agents, liveHarness, networkHarness } from "./helpers";
 
+test("protocol and payload closes stop automatic retries while preserving manual recovery", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const code of [1002, 1003, 1007, 1009]) {
+    const network = networkHarness();
+    const { client, sockets, events } = liveHarness({ network: network.network, heartbeatMs: 20,
+      pongTimeoutMs: 10, acknowledgementTimeoutMs: 100, interruptTimeoutMs: 100 });
+    let state = emptyChatState();
+    client.subscribe((event) => { state = chatReducer(state, event); });
+    t.after(() => client.disconnect());
+    await client.connect(); const first = sockets[0]; first.open(); first.ready();
+    const user = { id: "pending", agentId: "a", role: "user" as const, kind: "text" as const,
+      text: "Keep the retry identity", createdAt: 1 };
+    state = chatReducer(state, { type: "optimistic", message: user });
+    state = chatReducer(state, { type: "draft", agentId: "a", text: "Keep the next draft" });
+    await client.sendMessage({ agentId: "a", clientMessageId: user.id, text: user.text, localCreatedAt: user.createdAt });
+    first.frame({ type: "chat_reply", agentId: "a", messageId: "reply", createdAt: 2,
+      streaming: true, payload: { text: "Partial reply" } });
+    await client.interrupt("a");
+    // A browser error may arrive before the close code. The preserved code
+    // must decide whether this connection can recover without a client change.
+    first.onerror?.();
+    first.remoteClose(code);
+    assert.equal(state.connection, "error");
+    assert.match(state.connectionDetail!, new RegExp(String(code)));
+    assert.doesNotMatch(state.connectionDetail!, /Reconnecting/);
+    assert.equal(state.messagesByAgent.a[0].failed, true);
+    assert.equal(state.messagesByAgent.a[1].interrupted, true);
+    assert.equal(isAgentWorking(state, "a"), false);
+    assert.equal(network.listeners.size, 0);
+    const count = events.length;
+    network.setOnline(false); network.setOnline(true);
+    t.mock.timers.tick(60_000);
+    assert.equal(sockets.length, 1, `${code} must not loop on the same rejected protocol or payload`);
+    assert.equal(events.length, count, "terminal closure cancels heartbeat, delivery and Stop deadlines");
+
+    await client.connect(); const next = sockets[1]; next.open(); next.ready();
+    assert.deepEqual(next.sent.map((frame) => frame.type), ["hello"], "reconnect cannot resend automatically");
+    assert.equal(state.draftsByAgent.a, "Keep the next draft");
+    await client.sendMessage({ agentId: "a", clientMessageId: user.id, text: user.text });
+    assert.deepEqual(next.sent.at(-1), first.sent.find((frame) => frame.type === "send"));
+    next.frame({ type: "message", message: { ...user, clientMessageId: user.id } });
+    assert.equal(state.messagesByAgent.a[0].failed, false);
+    assert.equal(state.messagesByAgent.a.filter((message) => message.role === "user").length, 1);
+    client.disconnect();
+  }
+});
+
 test("brief authenticated reconnects retain capped backoff and never resend pending messages", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const { client, sockets } = liveHarness({ maxBackoffMs: 5000 });

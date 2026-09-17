@@ -5,6 +5,22 @@ import { MAX_MESSAGE_LENGTH, type ChannelEvent } from "./types";
 export const PROTOCOL_VERSION = 1;
 const MAX_FRAME_BYTES = 1_000_000;
 
+const TERMINAL_CLOSE_DETAILS = new Map<number, string>([
+  [1002, "Channel protocol error (1002). Check that this app and Zakura use compatible versions."],
+  [1003, "Zakura rejected the channel data type (1003). Check that this app and Zakura use compatible versions."],
+  [1007, "Zakura rejected invalid channel data (1007). Check that this app and Zakura use compatible versions."],
+  [1009, "Zakura rejected an oversized channel message (1009). Check the server's message limits before reconnecting."],
+  [1008, "Channel access denied. Check your binding and token."],
+  [4401, "Authentication failed. Check your token in Settings."],
+  [4403, "Channel access denied. Check your binding and token."],
+]);
+
+/** Protocol/data rejection needs intervention; transport and service failures can retry. */
+export function channelCloseFailure(code: number): { detail: string; retry: boolean } {
+  const detail = TERMINAL_CLOSE_DETAILS.get(code);
+  return detail ? { detail, retry: false } : { detail: `Connection closed (${code}). Reconnecting…`, retry: true };
+}
+
 export class UnsupportedChannelProtocolError extends Error {
   constructor() {
     super("This server uses an unsupported channel protocol.");

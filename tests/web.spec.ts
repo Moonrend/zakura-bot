@@ -16,6 +16,69 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+for (const width of [1440, 320]) test(`selecting reply text pauses following until reading resumes (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      for (let index = 0; index < 15; index++) socket.send(JSON.stringify({ type: "chat_reply", agentId: "live",
+        messageId: `history-${index}`, createdAt: index,
+        payload: { text: `Select this reply ${index}. ${"Readable history. ".repeat(15)}` } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false,
+  })), { key: settingsKey });
+  await page.goto("/");
+  const transcript = page.getByTestId("chat-transcript");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
+  await expect(page.getByTestId("message-history-14")).toBeVisible();
+  await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(2);
+  await transcript.focus();
+  const selected = await page.getByTestId("message-history-14").getByTestId("message-text").evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges(); selection.addRange(range);
+    return selection.toString();
+  });
+  const before = await transcript.evaluate((element) => element.scrollTop);
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "incoming", createdAt: 15,
+    streaming: true, payload: { text: "Small update" } }));
+  await expect(page.getByTestId("message-incoming")).toContainText("Small update");
+  const settledTop = () => transcript.evaluate(async (element) => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    return element.scrollTop;
+  });
+  expect(await settledTop()).toBe(before);
+  await expect(jump).toBeVisible();
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "incoming",
+    delta: `\n${"More arriving output.\n".repeat(40)}End of incoming output.` }));
+  await expect(page.getByTestId("message-incoming")).toContainText("End of incoming output.");
+  expect(await settledTop()).toBe(before);
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe(selected);
+
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "incoming" }));
+  expect(await settledTop()).toBe(before);
+  await jump.click();
+  await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(2);
+  await input.fill("Keep editing this next draft");
+  await input.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(5, 12));
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "next", createdAt: 16,
+    payload: { text: "Follow this reply while editing the draft." } }));
+  await expect(page.getByTestId("message-next")).toBeVisible();
+  await expect.poll(() => transcript.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(2);
+  await expect(jump).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep editing this next draft");
+  expect(await input.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([5, 12]);
+});
+
 test("disabling focused conversation controls preserves navigation and the next draft", async ({ page, context }) => {
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
