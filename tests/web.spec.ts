@@ -16,6 +16,48 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+for (const width of [320, 1024]) test(`connection recovery and multiline drafts remain reachable in short windows (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 320 });
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({
+    zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false,
+  })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  const draft = Array.from({ length: 12 }, (_, index) => `Draft line ${index + 1}`).join("\n");
+  await input.fill(draft);
+  channel!.close({ code: 4401, reason: "Device token expired" });
+  const reconnect = page.getByRole("button", { name: "Reconnect", exact: true });
+  const settings = page.getByRole("button", { name: "Edit connection settings", exact: true });
+  await expect(reconnect).toBeVisible();
+  for (const height of [240, 220, 320]) {
+    await page.setViewportSize({ width, height });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+    for (const control of [input, reconnect, settings]) {
+      const box = (await control.boundingBox())!;
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.y + box.height).toBeLessThanOrEqual(height);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+    await input.press("Control+End");
+    await expect.poll(() => input.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(input).toHaveValue(draft);
+    await noOverflow(page);
+    if (height === 220) await accessible(page);
+  }
+  await reconnect.press("Enter");
+  await expect(reconnect).toHaveCount(0);
+  await expect(input).toBeEditable();
+  await expect(input).toHaveValue(draft);
+});
+
 for (const width of [1440, 320]) test(`settings navigation restores keyboard focus and keeps drafts (${width}px)`, async ({ page }) => {
   await mockReady(page);
   await page.setViewportSize({ width, height: 844 });

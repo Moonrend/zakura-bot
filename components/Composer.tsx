@@ -18,7 +18,9 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   const { selectedId, draftsByAgent, setDraft, clearDraft, send, interrupt, interrupting, connection } = useStore();
   const text = draftsByAgent[selectedId] ?? "";
   const { height: windowHeight } = useWindowDimensions();
-  const maxInputHeight = Math.max(44, Math.min(160, Math.floor(windowHeight * 0.25)));
+  // Leave room for connection recovery controls in short windows. Longer
+  // drafts scroll inside the input and expand again when more height returns.
+  const maxInputHeight = windowHeight < 300 ? 44 : Math.max(44, Math.min(160, Math.floor(windowHeight * 0.25)));
   const [focused, setFocused] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [height, setHeight] = useState(44);

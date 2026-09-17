@@ -1,5 +1,5 @@
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
-import { AlertTriangle, RefreshCw, WifiOff, X } from "lucide-react-native";
+import { AlertTriangle, RefreshCw, Settings, WifiOff, X } from "lucide-react-native";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
@@ -13,6 +13,8 @@ export function StatusBanner({ onFocusLost }: { onFocusLost: () => void }) {
   const { connection, connectionDetail, lastError, reconnect, dismissError, settings, selectedId } =
     useStore();
   const router = useRouter();
+  const { height } = useWindowDimensions();
+  const shortWindow = height < 400;
 
   const error = lastError && (!lastError.agentId || lastError.agentId === selectedId) ? lastError : null;
 
@@ -37,17 +39,21 @@ export function StatusBanner({ onFocusLost }: { onFocusLost: () => void }) {
         onFocusLost={onFocusLost}
         icon={<WifiOff size={14} color="#ff5667" />}
         action={
-          <View className="items-end gap-1"><Pressable
+          <View className={cn("gap-1", shortWindow ? "flex-row" : "items-end")}><Pressable
             onPress={() => void reconnect()}
             accessibilityRole="button"
             accessibilityLabel="Reconnect"
-            className="min-h-11 flex-row items-center gap-1 rounded-xl bg-raised px-3 py-2 active:bg-raised-hover"
+            className={cn("min-h-11 flex-row items-center rounded-xl bg-raised active:bg-raised-hover",
+              shortWindow ? "w-11 justify-center" : "gap-1 px-3 py-2")}
           >
-            <RefreshCw size={12} color="#fcfcfc" />
-            <Text className="text-[12px] text-ink">Reconnect</Text>
+            <RefreshCw size={shortWindow ? 16 : 12} color="#fcfcfc" />
+            {!shortWindow ? <Text className="text-[12px] text-ink">Reconnect</Text> : null}
           </Pressable>
           {live ? <Pressable onPress={() => router.push("/settings")} accessibilityRole="button" accessibilityLabel="Edit connection settings"
-            className="min-h-11 justify-center rounded-xl px-3 py-2 active:bg-raised"><Text className="text-[12px] text-ink">Settings</Text></Pressable> : null}</View>
+            className={cn("min-h-11 justify-center rounded-xl active:bg-raised",
+              shortWindow ? "w-11 items-center" : "px-3 py-2")}>
+            {shortWindow ? <Settings size={16} color="#fcfcfc" /> : <Text className="text-[12px] text-ink">Settings</Text>}
+          </Pressable> : null}</View>
         }
       >
         <Text className="text-[13px] leading-5 text-ink">
@@ -102,20 +108,22 @@ function Banner({
   onFocusLost: () => void;
 }) {
   const { height } = useWindowDimensions();
+  const shortWindow = height < 400;
   const setRef = useFocusOnRemoval(onFocusLost);
   return (
     <View ref={setRef}
       accessibilityLiveRegion="polite"
       accessibilityRole={tone === "muted" ? undefined : "alert"}
       className={cn(
-        "mx-4 mb-2 flex-row items-center gap-2 rounded-xl border px-3 py-2",
+        "mx-4 flex-row items-center gap-2 rounded-xl border px-3",
+        shortWindow ? "mb-1 py-1" : "mb-2 py-2",
         tone === "muted" && "border-hairline bg-panel",
         tone === "danger" && "border-danger/40 bg-danger/10",
         tone === "warning" && "border-warning/40 bg-warning/10",
       )}
     >
       {icon}
-      <ScrollView className="min-w-0 flex-1" style={{ maxHeight: Math.max(48, Math.min(180, height * 0.25)) }}
+      <ScrollView className="min-w-0 flex-1" style={{ maxHeight: shortWindow ? 44 : Math.min(180, height * 0.25) }}
         accessibilityLabel="Channel status details" role={Platform.OS === "web" ? "region" : undefined}
         tabIndex={Platform.OS === "web" ? 0 : undefined} keyboardShouldPersistTaps="handled">
         {children}
