@@ -5,6 +5,40 @@ import { decodeServerFrame } from "../lib/channel/protocol";
 import { chatReducer, emptyChatState, isAgentWorking } from "../lib/chat-state";
 import { agents, liveHarness, networkHarness } from "./helpers";
 
+test("a ready roster cannot reconnect a socket that entered close grace during its notification", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const trigger of ["error", "offline"] as const) {
+    const network = networkHarness();
+    const { client, sockets, events } = liveHarness({ network: network.network, heartbeatMs: 50, pongTimeoutMs: 20 });
+    let state = emptyChatState();
+    client.subscribe((event) => { state = chatReducer(state, event); });
+    t.after(() => client.disconnect());
+    await client.connect();
+    const socket = sockets[0];
+    socket.open();
+    const unsubscribe = client.subscribe((event) => {
+      if (event.type !== "agents") return;
+      socket.readyState = 2;
+      if (trigger === "error") socket.onerror?.();
+      else network.setOnline(false);
+    });
+    socket.ready();
+    unsubscribe();
+    assert.equal(client.getConnectionState(), "error", trigger);
+    assert.equal(state.connection, "error", "the UI must not re-enable Send on the closing socket");
+    assert.equal(events.some((event) => event.type === "connection" && event.state === "connected"), false);
+    await assert.rejects(client.sendMessage({ agentId: "a", text: "Keep this draft" }), /Not connected/);
+    network.setOnline(true);
+    t.mock.timers.tick(100);
+    assert.equal(socket.sent.some((frame) => frame.type === "ping" || frame.type === "send"), false);
+    socket.remoteClose(4401);
+    t.mock.timers.tick(10_000);
+    assert.equal(sockets.length, 1, "authentication failure remains terminal after ready notification");
+    assert.match(JSON.stringify(events.at(-1)), /Authentication failed/);
+    client.disconnect();
+  }
+});
+
 test("a late delivery failure and its retry cannot erase a separate turn failure", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const { client, sockets } = liveHarness();

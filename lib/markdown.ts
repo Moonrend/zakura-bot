@@ -1,7 +1,12 @@
 export type MarkdownBlock = { code: boolean; text: string; language?: string };
 export type MarkdownSpan =
-  | { kind: "text" | "strong" | "code"; text: string }
+  | { kind: "text" | "literal" | "strong" | "code"; text: string }
   | { kind: "link"; text: string; url: string };
+
+// CommonMark escapes ASCII punctuation, not letters in paths such as C:\work.
+function unescapeMarkdown(text: string): string {
+  return text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+}
 
 /** Line-delimited fences keep backticks inside code verbatim while streaming. */
 export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
@@ -44,7 +49,7 @@ export function parseInlineMarkdown(text: string, streaming = false): MarkdownSp
       : parseInlineParagraph(parts[index], streaming && index === parts.length - 1);
     for (const span of part) {
       const previous = spans.at(-1);
-      if (previous?.kind === "text" && span.kind === "text") previous.text += span.text;
+      if ((span.kind === "text" || span.kind === "literal") && previous?.kind === span.kind) previous.text += span.text;
       else spans.push(span);
     }
   }
@@ -62,17 +67,28 @@ function parseInlineParagraph(line: string, streaming: boolean): MarkdownSpan[] 
     const run = backticks[index];
     const next = nextByLength.get(run[0].length);
     if (next !== undefined) codeEnds.set(run.index, next);
+    // An escape consumes just the first tick of a run. Its remaining ticks can
+    // open code, whose closing run still ignores backslash escapes entirely.
+    if (run[0].length > 1) {
+      const suffixEnd = nextByLength.get(run[0].length - 1);
+      if (suffixEnd !== undefined) codeEnds.set(run.index + 1, suffixEnd);
+    }
     nextByLength.set(run[0].length, run.index);
   }
   // Excluding nested '[' prevents repeated scans of unfinished streaming labels.
-  const token = /`+|\*\*[^*]+\*\*|\[([^\[\]]+)\]\(https?:\/\//gi;
+  const token = /\\[^\n]|`+|\*\*(?:\\[^\n]|[^*\\])+\*\*|\[((?:\\[^\n]|[^\[\]\\])+)\]\(https?:\/\//gi;
   const spans: MarkdownSpan[] = [];
   let offset = 0;
   let match: RegExpExecArray | null;
   while ((match = token.exec(line))) {
     let end = token.lastIndex;
     let span: MarkdownSpan;
-    if (match[0][0] === "`") {
+    if (match[0][0] === "\\") {
+      const text = unescapeMarkdown(match[0]);
+      // Keep escaped punctuation separate so rendering cannot turn an escaped
+      // list marker back into a bullet after the backslash has been removed.
+      span = { kind: text === match[0] ? "text" : "literal", text };
+    } else if (match[0][0] === "`") {
       const closing = codeEnds.get(match.index);
       if (closing === undefined) {
         // A delimiter still arriving can turn this tail into code. Keep its
@@ -101,9 +117,9 @@ function parseInlineParagraph(line: string, streaming: boolean): MarkdownSpan[] 
       if (depth !== 0) continue;
       end = cursor + 1;
       const urlStart = match.index + match[1].length + 3;
-      span = { kind: "link", text: match[1], url: line.slice(urlStart, cursor).replace(/\\([\\()])/g, "$1") };
+      span = { kind: "link", text: unescapeMarkdown(match[1]), url: line.slice(urlStart, cursor).replace(/\\([\\()])/g, "$1") };
     } else {
-      span = { kind: "strong", text: match[0].slice(2, -2) };
+      span = { kind: "strong", text: unescapeMarkdown(match[0].slice(2, -2)) };
     }
     if (match.index > offset) spans.push({ kind: "text", text: line.slice(offset, match.index) });
     spans.push(span);

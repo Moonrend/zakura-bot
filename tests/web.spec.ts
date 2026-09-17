@@ -118,6 +118,55 @@ test("responsive sidebar transitions retain filters and restore navigation focus
   await accessible(page);
 });
 
+test("streamed Markdown escapes preserve literal links and list markers without changing raw replies", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1,
+        agents: [{ id: "live", name: "Live", status: "idle" }] }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep the next draft");
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "escaped", createdAt: 1,
+    streaming: true, payload: { text: "\\" } }));
+  const reply = page.getByTestId("message-escaped");
+  await expect(reply).toContainText("\\");
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "escaped",
+    delta: "[Literal](https://example.com)\n\\- literal dash\n\\* literal star\n- real list\n" }));
+  await expect(reply).toContainText("[Literal](https://example.com)");
+  await expect(reply.getByRole("link")).toHaveCount(0);
+  await expect(reply).toContainText("- literal dash");
+  await expect(reply).toContainText("* literal star");
+  await expect(reply).toContainText("• real list");
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "escaped",
+    delta: "\\` then [Docs](https://example.com/guide_(one))\n**a\\*b** and [A\\]B](https://example.com)" }));
+  await expect(reply).toContainText("` then Docs");
+  await expect(reply).toContainText("a*b and A]B");
+  await expect(reply.getByRole("link")).toHaveCount(2);
+  await expect(reply.getByRole("link", { name: "Docs, opens in browser", exact: true }))
+    .toHaveAttribute("href", "https://example.com/guide_(one)");
+  channel!.send(JSON.stringify({ type: "message_delta", agentId: "live", messageId: "escaped",
+    delta: "\n`\\[Code](https://example.com) \\*`" }));
+  await expect(reply).toContainText("\\[Code](https://example.com) \\*");
+  await expect(reply.getByRole("link")).toHaveCount(2);
+  channel!.send(JSON.stringify({ type: "message_done", agentId: "live", messageId: "escaped" }));
+  const rawText = "\\[Raw](https://example.com)\n\\- raw dash\n\\* raw star";
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "raw-escaped", createdAt: 2,
+    payload: { text: rawText, format: "raw" } }));
+  const rawReply = page.getByTestId("message-raw-escaped");
+  await expect(rawReply.getByTestId("message-text")).toHaveText(rawText);
+  await expect(rawReply.getByRole("link")).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Keep the next draft");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await noOverflow(page);
+  await accessible(page);
+});
+
 test("inline code containing backticks never activates its Markdown links", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {

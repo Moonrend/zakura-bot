@@ -328,8 +328,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
       this.handshakeTimer = null;
       this.attempt = 0;
       this.updateRoster(frame.agents);
-      // Subscribers can disconnect or replace the client during either event.
-      if (this.socket !== socket || this.closedByUser) return;
+      // Subscribers can disconnect, replace the client, or put this same socket
+      // into close grace. Only the still-pending handshake can become ready.
+      if (this.socket !== socket || this.closedByUser || this.state !== "connecting") return;
       this.setState("connected", "zakurabot");
       if (socket) this.startHeartbeat(socket);
       return;

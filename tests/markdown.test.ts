@@ -2,6 +2,37 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseInlineMarkdown, parseMarkdownBlocks } from "../lib/markdown";
 
+test("escaped Markdown punctuation stays literal while code retains its original backslashes", () => {
+  const literalLink = String.raw`\[Literal](https://example.com)`;
+  for (const streaming of [false, true]) {
+    const spans = parseInlineMarkdown(literalLink + " then [Docs](https://example.com)", streaming);
+    assert.equal(spans.filter((span) => span.kind === "link").length, 1);
+    assert.equal(spans.map((span) => span.text).join(""), "[Literal](https://example.com) then Docs");
+    assert.deepEqual(parseInlineMarkdown(String.raw`**a\*b** and [A\]B](https://example.com)`, streaming), [
+      { kind: "strong", text: "a*b" }, { kind: "text", text: " and " },
+      { kind: "link", text: "A]B", url: "https://example.com" },
+    ]);
+  }
+  const source = "`" + String.raw`\[Literal](https://example.com) \*` + "`";
+  assert.deepEqual(parseInlineMarkdown(source), [{ kind: "code", text: String.raw`\[Literal](https://example.com) \*` }]);
+  assert.deepEqual(parseInlineMarkdown(String.raw`C:\work\notes`), [{ kind: "text", text: String.raw`C:\work\notes` }]);
+  assert.deepEqual(parseInlineMarkdown(String.raw`\[`.repeat(20_000), true), [{ kind: "literal", text: "[".repeat(20_000) }],
+    "a long run of escaped punctuation must not create thousands of rendered text nodes");
+});
+
+test("escaped backticks cannot open a streaming code span or hide the remaining backtick run", () => {
+  const escaped = "\\` then [Docs](https://example.com)";
+  const spans = parseInlineMarkdown(escaped, true);
+  assert.equal(spans.map((span) => span.text).join(""), "` then Docs");
+  assert.equal(spans.filter((span) => span.kind === "link").length, 1);
+  // Only the first tick is escaped; the second opens code. Inside code a
+  // backslash is ordinary text, so it cannot escape the closing delimiter.
+  const code = parseInlineMarkdown("\\``[Literal](https://example.com)\\`", true);
+  assert.equal(code.map((span) => span.text).join(""), "`[Literal](https://example.com)\\");
+  assert.equal(code.filter((span) => span.kind === "link").length, 0);
+  assert.equal(code.at(-1)?.kind, "code");
+});
+
 test("fenced code ends only on a matching line and retains shorter fences as source", () => {
   assert.deepEqual(parseMarkdownBlocks("Before\n````md\n```js\nconst marker = '```';\n```\n~~~\n````\nAfter"), [
     { code: false, text: "Before" },
