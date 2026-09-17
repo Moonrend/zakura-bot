@@ -16,6 +16,121 @@ async function accessible(page: Page) {
   expect(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target) }))).toEqual([]);
 }
 
+test("roster revocation and changing search matches keep keyboard focus in the agent list", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  const roster = [{ id: "alpha", name: "Alpha", status: "idle" }, { id: "beta", name: "Beta", status: "idle" }];
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: roster }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Alpha", exact: true });
+  await input.fill("Keep the Alpha draft");
+  const search = page.getByRole("textbox", { name: "Search agents", exact: true });
+  const list = page.getByRole("region", { name: "Agent list", exact: true });
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "beta", messageId: "match", createdAt: 1, payload: { text: "Search needle" } }));
+  await search.fill("needle");
+  await agent(page, "Beta").focus();
+  channel!.send(JSON.stringify({ type: "chat_reply", agentId: "beta", messageId: "match", createdAt: 1, payload: { text: "Changed preview" } }));
+  await expect(agent(page, "Beta")).toHaveCount(0);
+  await expect(list).toBeFocused();
+  await expect(search).toHaveValue("needle");
+  await expect(input).toHaveValue("Keep the Alpha draft");
+  await search.fill("");
+  await agent(page, "Beta").focus();
+  channel!.send(JSON.stringify({ type: "agents", agents: [roster[0]] }));
+  await expect(list).toBeFocused();
+  // Removing an unrelated row must not steal an active draft's focus.
+  channel!.send(JSON.stringify({ type: "agents", agents: roster }));
+  await expect(agent(page, "Beta")).toBeVisible();
+  await input.focus();
+  channel!.send(JSON.stringify({ type: "agents", agents: [roster[0]] }));
+  await expect(agent(page, "Beta")).toHaveCount(0);
+  await expect(input).toBeFocused();
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.getByRole("button", { name: "Open agent list", exact: true }).click();
+  channel!.send(JSON.stringify({ type: "agents", agents: roster }));
+  await agent(page, "Beta").focus();
+  channel!.send(JSON.stringify({ type: "agents", agents: [roster[0]] }));
+  await expect(list).toBeFocused();
+  await noOverflow(page);
+  await accessible(page);
+});
+
+test("revoking the focused conversation moves focus to its replacement without reusing drafts", async ({ page }) => {
+  let channel: WebSocketRoute | undefined;
+  const roster = [{ id: "alpha", name: "Alpha", status: "idle" }, { id: "beta", name: "Beta", status: "idle" }];
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    channel = socket;
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: roster }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  await page.getByRole("textbox", { name: "Message Alpha", exact: true }).fill("Revoked Alpha draft");
+  channel!.send(JSON.stringify({ type: "agents", agents: [roster[1]] }));
+  const transcript = page.getByRole("region", { name: "Conversation with Beta", exact: true });
+  await expect(transcript).toBeFocused();
+  const input = page.getByRole("textbox", { name: "Message Beta", exact: true });
+  await expect(input).toHaveValue("");
+  await input.fill("Revoked Beta draft");
+  channel!.send(JSON.stringify({ type: "agents", agents: [] }));
+  const setup = page.getByRole("region", { name: "Channel setup", exact: true });
+  await expect(setup).toBeFocused();
+  await expect(page.getByRole("textbox", { name: /^Message / })).toHaveCount(0);
+  channel!.send(JSON.stringify({ type: "agents", agents: roster }));
+  await expect(page.getByRole("region", { name: "Conversation with Alpha", exact: true })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "Message Alpha", exact: true })).toHaveValue("");
+  await accessible(page);
+});
+
+test("reply actions and file links make their entire padded area keyboard and touch accessible", async ({ page, context }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  await context.route("https://files.example.com/**", (route) => route.fulfill({ body: "Test destination" }));
+  await page.routeWebSocket("**/api/zakurabot/ws", (socket) => {
+    socket.onMessage((raw) => {
+      if (JSON.parse(String(raw)).type !== "hello") return;
+      socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [{ id: "live", name: "Live", status: "idle" }] }));
+      socket.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId: "actions", createdAt: 1, payload: {
+        actions: [{ label: "Open report", url: "https:files.example.com/report?signature=a%2Bb", style: "primary" }],
+        attachments: [{ url: "https://files.example.com/download.pdf", name: "Report.pdf" }],
+        card: { links: [{ label: "Review details", url: "https://files.example.com/details", style: "danger" }] },
+      } }));
+    });
+  });
+  await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
+  await page.goto("/");
+  const input = page.getByRole("textbox", { name: "Message Live", exact: true });
+  await input.fill("Keep my draft");
+  for (const label of ["Open report", "Report.pdf", "Review details"]) {
+    const link = page.getByRole("link", { name: `${label}, opens in browser`, exact: true });
+    await expect(link).toBeVisible();
+    const bounds = await link.boundingBox();
+    expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", /noopener/);
+  }
+  const report = page.getByRole("link", { name: "Open report, opens in browser", exact: true });
+  const popupPromise = page.waitForEvent("popup");
+  await report.click({ position: { x: 4, y: 4 } });
+  const popup = await popupPromise;
+  await expect(popup).toHaveURL("https://files.example.com/report?signature=a%2Bb");
+  await popup.close();
+  const details = page.getByRole("link", { name: "Review details, opens in browser", exact: true });
+  const keyboardPopupPromise = page.waitForEvent("popup");
+  await details.press("Enter");
+  const keyboardPopup = await keyboardPopupPromise;
+  await expect(keyboardPopup).toHaveURL("https://files.example.com/details");
+  await keyboardPopup.close();
+  await expect(input).toHaveValue("Keep my draft");
+  await noOverflow(page);
+  await accessible(page);
+});
+
 test("empty-thread suggestions and disappearing error controls preserve keyboard focus and drafts", async ({ page }) => {
   let channel: WebSocketRoute | undefined;
   let sent: { clientMessageId: string; text: string } | undefined;

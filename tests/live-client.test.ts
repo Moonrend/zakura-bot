@@ -5,6 +5,35 @@ import { decodeServerFrame } from "../lib/channel/protocol";
 import { chatReducer, emptyChatState, isAgentWorking } from "../lib/chat-state";
 import { agents, liveHarness, networkHarness } from "./helpers";
 
+test("a Stop settled or revoked by a progress listener is never written to the socket", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const reason of ["finished", "offline", "removed"] as const) {
+    const { client, sockets, events } = liveHarness({ interruptTimeoutMs: 100 });
+    t.after(() => client.disconnect());
+    await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+    socket.frame({ type: "typing", agentId: "a", active: true });
+    const unsubscribe = client.subscribe((event) => {
+      if (event.type !== "interrupt_pending" || !event.pending) return;
+      if (reason === "finished") {
+        socket.frame({ type: "typing", agentId: "a", active: false });
+        // The request belongs to the old turn, even if new work starts now.
+        socket.frame({ type: "typing", agentId: "a", active: true });
+      } else socket.frame({ type: "agents", agents: reason === "removed" ? [agents[1]]
+        : [{ ...agents[0], status: "offline" }, agents[1]] });
+    });
+    await client.interrupt("a");
+    unsubscribe();
+    assert.equal(socket.sent.some((frame) => frame.type === "interrupt"), false, reason);
+    const count = events.length;
+    t.mock.timers.tick(100);
+    assert.equal(events.length, count, "a cancelled Stop cannot leave a deadline behind");
+    socket.frame({ type: "agents", agents });
+    await client.interrupt("a");
+    assert.equal(socket.sent.filter((frame) => frame.type === "interrupt").length, 1, "a fresh Stop still works");
+    client.disconnect();
+  }
+});
+
 test("an optimistic timestamp and a later transport clock cannot disagree about the active turn", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   t.mock.method(Date, "now", () => 20);

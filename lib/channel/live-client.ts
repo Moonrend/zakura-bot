@@ -608,6 +608,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.interrupts.set(agentId, pending);
     this.emitter.emit({ type: "interrupt_pending", agentId, pending: true });
     if (this.socket !== socket || this.closedByUser) throw new Error("The channel disconnected before the stop request was sent.");
+    // A subscriber may observe turn completion or roster revocation before
+    // this write. Never let that cancelled request reach a replacement turn.
+    if (this.interrupts.get(agentId) !== pending) return;
     if (!this.sendFrame({ type: "interrupt", agentId })) {
       this.fail("Connection lost. Reconnecting…", true);
       throw new Error("Could not stop the reply. Check the channel connection.");

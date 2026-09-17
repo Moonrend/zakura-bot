@@ -227,21 +227,22 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "error": {
       if (action.agentId && !state.agents.some((agent) => agent.id === action.agentId)) return state;
       let next = state;
+      let turnEnded = action.turnEnded === true;
       if (action.agentId && action.clientMessageId) {
         const messages = state.messagesByAgent[action.agentId] ?? [];
         const message = messages.find((item) => item.id === action.clientMessageId || item.serverId === action.clientMessageId || item.clientMessageId === action.clientMessageId);
         if (message?.role !== "user") return state;
         const latestUser = [...messages].reverse().find((item) => item.role === "user");
-        const turnEnded = action.turnEnded === true && latestUser?.id === message.id;
+        turnEnded = turnEnded && latestUser?.id === message.id;
         const undelivered = message.pending || message.failed;
         if (!undelivered && !turnEnded) return state;
         // Rejection or an absent receipt says nothing about an agent that may
         // already be working, including the interval before its first output.
         if (turnEnded) next = endTurn(state, action.agentId);
         if (undelivered) next = putMessage(next, { ...message, pending: false, failed: true });
-      } else if (action.agentId && action.turnEnded === true) next = endTurn(state, action.agentId);
+      } else if (action.agentId && turnEnded) next = endTurn(state, action.agentId);
       const error: ChannelError = { message: action.message, agentId: action.agentId, clientMessageId: action.clientMessageId,
-        ...(action.turnEnded === true ? { turnEnded: true } : {}) };
+        ...(turnEnded ? { turnEnded: true } : {}) };
       return { ...next, errors: [...next.errors.filter((item) => item.agentId !== action.agentId), error] };
     }
   }

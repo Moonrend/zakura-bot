@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { Plus, Search, Settings, X, CheckCheck } from "lucide-react-native";
 import { useRouter } from "expo-router";
@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
 import { formatTime, useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
+import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 
 const CONNECTION_DOT = { connected: "bg-success", connecting: "bg-warning", error: "bg-danger", disconnected: "bg-ink-secondary" };
 const STATUS_DOT = { idle: "bg-success", busy: "bg-warning", offline: "bg-ink-secondary" };
@@ -32,6 +33,12 @@ export function AgentSidebar() {
   }, [agents, draftsByAgent, query, unreadOnly]);
   const connectionLabel = connection === "connected" ? `${transportLabel} channel · connected`
     : connection === "connecting" ? "Connecting…" : connection === "error" ? "Channel error" : "Disconnected";
+  const focusList = useCallback(() => {
+    if (Platform.OS === "web") {
+      const list = listRef.current?.getScrollableNode() as HTMLElement | null | undefined;
+      list?.focus({ preventScroll: true });
+    }
+  }, []);
 
   useLayoutEffect(() => {
     if (Platform.OS !== "web") return;
@@ -123,7 +130,7 @@ export function AgentSidebar() {
             const draft = draftsByAgent[agent.id]?.trim();
             const subtitle = draft ? `Draft: ${draft}` : status === "busy" ? "Working…" : agent.preview ?? agent.title ?? "No messages yet";
             return (
-              <Pressable key={agent.id} onPress={() => {
+              <AgentRow key={agent.id} onFocusLost={focusList} onPress={() => {
                 selectAgent(agent.id);
                 if (compact) setSidebarOpen(false);
                 else if (unreadOnly && Platform.OS === "web") unreadFilterRef.current?.focus();
@@ -146,7 +153,7 @@ export function AgentSidebar() {
                     {agent.unread ? <View className="h-2 w-2 shrink-0 rounded-full bg-accent" /> : null}
                   </View>
                 </View>
-              </Pressable>
+              </AgentRow>
             );
           })}
         </View>
@@ -160,4 +167,9 @@ export function AgentSidebar() {
       </View>
     </View>
   );
+}
+
+function AgentRow({ onFocusLost, ...props }: ComponentProps<typeof Pressable> & { onFocusLost: () => void }) {
+  const ref = useFocusOnRemoval(onFocusLost);
+  return <Pressable {...props} ref={ref} />;
 }

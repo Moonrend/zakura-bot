@@ -56,15 +56,11 @@ export function ReplyContent({ message, replyTarget }: { message: ChatMessage; r
         </View>
       ) : null}
       {message.attachments?.map((file, index) => (
-        <View key={index} className="max-w-full flex-row items-center gap-2 rounded-xl border border-hairline px-3 py-2">
-          <Paperclip size={15} color="#b3b3b3" />
-          <View className="min-w-0 flex-1"><ExternalLink url={file.url} label={file.name || filename(file.url)} /></View>
-        </View>
+        <ExternalLink key={index} url={file.url} label={file.name || filename(file.url)} buttonStyle="default"
+          icon={<Paperclip size={15} color="#b3b3b3" />} />
       ))}
-      {images.map((item, index) => <ExternalLink key={`image_${index}`} url={item.url} label={item.alt || "Open image"} />)}
-      {links.map((link, index) => <View key={`link_${index}`} className="min-h-11 justify-center rounded-lg border border-hairline px-3 py-2">
-        <ExternalLink url={link.url} label={link.label} />
-      </View>)}
+      {images.map((item, index) => <ExternalLink key={`image_${index}`} url={item.url} label={item.alt || "Open image"} buttonStyle="default" />)}
+      {links.map((link, index) => <ExternalLink key={`link_${index}`} url={link.url} label={link.label} buttonStyle={link.style ?? "default"} />)}
     </View>
   );
 }

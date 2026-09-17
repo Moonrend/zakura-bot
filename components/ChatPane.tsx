@@ -37,6 +37,7 @@ export function ChatPane() {
       node?.focus({ preventScroll: true });
     }
   }, []);
+  const setConversationRef = useFocusOnRemoval(focusTranscript);
 
   const scrollToLatest = useCallback((animated = false) => {
     if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
@@ -96,67 +97,69 @@ export function ChatPane() {
       </View>
 
       <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner onFocusLost={focusTranscript} /></View>
-      {!agent ? (
-        <ScrollView ref={scrollRef} className="min-h-0 flex-1" accessibilityLabel="Channel setup"
-          role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ flexGrow: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingVertical: 32 }}>
-          <MessageCircle size={40} color="#b3b3b3" />
-          <Text className="mt-5 text-center text-[20px] font-semibold text-ink">{connection === "connecting" ? "Connecting your agents…" : "No agents available"}</Text>
-          <Text className="mt-3 max-w-sm text-center text-[14px] leading-6 text-ink-secondary">
-            {connection === "connected" ? "Your channel has no agents yet. Check the agents assigned to your account."
-              : "Open Settings to connect your channel, or try the demo with the mock channel."}
-          </Text>
-          <Pressable onPress={() => router.push("/settings")} accessibilityRole="button" accessibilityLabel="Open connection settings"
-            className="mt-6 min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-raised px-4 py-3 active:bg-raised-hover">
-            <Settings size={16} color="#fcfcfc" /><Text className="text-[14px] text-ink">Connection settings</Text>
-          </Pressable>
-        </ScrollView>
-      ) : <>
-        <View className="min-h-0 min-w-0 flex-1">
-          <ScrollView key={selectedId} ref={scrollRef} testID="chat-transcript" className="min-w-0 flex-1"
+      <View key={selectedId} ref={setConversationRef} className="min-h-0 min-w-0 flex-1">
+        {!agent ? (
+          <ScrollView ref={scrollRef} className="min-h-0 flex-1" accessibilityLabel="Channel setup"
             role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
-            accessibilityLabel={`Conversation with ${agent.name}`} onScroll={onScroll} scrollEventThrottle={32}
-            onContentSizeChange={() => { if (pinnedRef.current) scrollToLatest(); }}
-            onLayout={() => { if (pinnedRef.current) scrollToLatest(); }}
-            // On web, on-drag also dismisses focus for programmatic auto-scroll.
-            keyboardDismissMode={Platform.OS === "web" ? "none" : Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingTop: 8, paddingBottom: 20, paddingHorizontal: compact ? 12 : 24,
-              maxWidth: 900, width: "100%", alignSelf: "center", flexGrow: rows.length === 0 ? 1 : undefined }}>
-            {rows.length === 0 ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"}
-              disabled={connection !== "connected" || agent.status === "offline" || busy}
-              onSuggest={(text) => void send(text, agent.id)} onFocusLost={focusTranscript} /> : null}
-            {rows.map((row) => row.kind === "day" ? (
-              <View key={row.key} className="my-3 flex-row items-center gap-3">
-                <View className="h-px flex-1 bg-hairline/70" />
-                <Text className="text-[11px] text-ink-secondary">{row.label}</Text>
-                <View className="h-px flex-1 bg-hairline/70" />
-              </View>
-            ) : <MessageBubble key={`message_${row.message.id}`} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
-              replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
-              retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
-              onRetry={(id) => void retryMessage(id)} onRetryFocusLost={focusTranscript} />)}
-            {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
-              <TypingDots reducedMotion={reducedMotion} /><Text className="min-w-0 flex-1 text-[12px] text-ink-secondary" numberOfLines={1}>{agent.name} is working…</Text>
-            </View> : null}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ flexGrow: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingVertical: 32 }}>
+            <MessageCircle size={40} color="#b3b3b3" />
+            <Text className="mt-5 text-center text-[20px] font-semibold text-ink">{connection === "connecting" ? "Connecting your agents…" : "No agents available"}</Text>
+            <Text className="mt-3 max-w-sm text-center text-[14px] leading-6 text-ink-secondary">
+              {connection === "connected" ? "Your channel has no agents yet. Check the agents assigned to your account."
+                : "Open Settings to connect your channel, or try the demo with the mock channel."}
+            </Text>
+            <Pressable onPress={() => router.push("/settings")} accessibilityRole="button" accessibilityLabel="Open connection settings"
+              className="mt-6 min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-raised px-4 py-3 active:bg-raised-hover">
+              <Settings size={16} color="#fcfcfc" /><Text className="text-[14px] text-ink">Connection settings</Text>
+            </Pressable>
           </ScrollView>
-          {!pinned ? <Pressable onPress={() => {
-            pinToLatest(true);
-            // The button disappears after activation. Keep keyboard navigation
-            // in the transcript instead of letting focus fall back to the page.
-            focusTranscript();
-          }}
-            accessibilityRole="button" accessibilityLabel="Jump to latest"
-            className="absolute bottom-3 right-4 h-11 w-11 items-center justify-center rounded-full border border-hairline bg-raised active:bg-raised-hover">
-            <ArrowDown size={19} color="#fcfcfc" />
-          </Pressable> : null}
-        </View>
-        <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
-          {busy ? `${agent.name} is replying.` : lastReply ? `${agent.name}${lastReply.interrupted ? " stopped" : " replied"}: ${lastReply.text ?? lastReply.card?.title ?? "Attachment"}` : "Ready for your message."}
-        </Text>
-        <Composer key={selectedId} agentName={agent.name} busy={busy} deliveryPending={deliveryPending}
-          agentOffline={agent.status === "offline"} bottomInset={insets.bottom} onSubmit={() => pinToLatest()} />
-      </>}
+        ) : <>
+          <View className="min-h-0 min-w-0 flex-1">
+            <ScrollView ref={scrollRef} testID="chat-transcript" className="min-w-0 flex-1"
+              role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
+              accessibilityLabel={`Conversation with ${agent.name}`} onScroll={onScroll} scrollEventThrottle={32}
+              onContentSizeChange={() => { if (pinnedRef.current) scrollToLatest(); }}
+              onLayout={() => { if (pinnedRef.current) scrollToLatest(); }}
+              // On web, on-drag also dismisses focus for programmatic auto-scroll.
+              keyboardDismissMode={Platform.OS === "web" ? "none" : Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingTop: 8, paddingBottom: 20, paddingHorizontal: compact ? 12 : 24,
+                maxWidth: 900, width: "100%", alignSelf: "center", flexGrow: rows.length === 0 ? 1 : undefined }}>
+              {rows.length === 0 ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"}
+                disabled={connection !== "connected" || agent.status === "offline" || busy}
+                onSuggest={(text) => void send(text, agent.id)} onFocusLost={focusTranscript} /> : null}
+              {rows.map((row) => row.kind === "day" ? (
+                <View key={row.key} className="my-3 flex-row items-center gap-3">
+                  <View className="h-px flex-1 bg-hairline/70" />
+                  <Text className="text-[11px] text-ink-secondary">{row.label}</Text>
+                  <View className="h-px flex-1 bg-hairline/70" />
+                </View>
+              ) : <MessageBubble key={`message_${row.message.id}`} message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
+                replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
+                retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
+                onRetry={(id) => void retryMessage(id)} onRetryFocusLost={focusTranscript} />)}
+              {busy && !messages.some((message) => message.streaming) ? <View className="mb-3 flex-row items-center gap-2 pl-1">
+                <TypingDots reducedMotion={reducedMotion} /><Text className="min-w-0 flex-1 text-[12px] text-ink-secondary" numberOfLines={1}>{agent.name} is working…</Text>
+              </View> : null}
+            </ScrollView>
+            {!pinned ? <Pressable onPress={() => {
+              pinToLatest(true);
+              // The button disappears after activation. Keep keyboard navigation
+              // in the transcript instead of letting focus fall back to the page.
+              focusTranscript();
+            }}
+              accessibilityRole="button" accessibilityLabel="Jump to latest"
+              className="absolute bottom-3 right-4 h-11 w-11 items-center justify-center rounded-full border border-hairline bg-raised active:bg-raised-hover">
+              <ArrowDown size={19} color="#fcfcfc" />
+            </Pressable> : null}
+          </View>
+          <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
+            {busy ? `${agent.name} is replying.` : lastReply ? `${agent.name}${lastReply.interrupted ? " stopped" : " replied"}: ${lastReply.text ?? lastReply.card?.title ?? "Attachment"}` : "Ready for your message."}
+          </Text>
+          <Composer agentName={agent.name} busy={busy} deliveryPending={deliveryPending}
+            agentOffline={agent.status === "offline"} bottomInset={insets.bottom} onSubmit={() => pinToLatest()} />
+        </>}
+      </View>
     </KeyboardAvoidingView>
   );
 }

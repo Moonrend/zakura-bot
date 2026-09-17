@@ -12,6 +12,24 @@ function initial() {
 const reply = (id: string, agentId = "a", text = "Hello", createdAt = 10): ChatMessage =>
   ({ id, agentId, role: "assistant", kind: "text", text, createdAt });
 
+test("an older unconfirmed turn error becomes a delivery error that a late receipt can clear", () => {
+  let state = initial();
+  const user = (id: string, createdAt: number): ChatMessage =>
+    ({ id, agentId: "a", role: "user", kind: "text", text: id, createdAt });
+  state = chatReducer(state, { type: "optimistic", message: user("old", 1) });
+  state = chatReducer(state, { type: "message", message: user("new", 2) });
+  state = chatReducer(state, { type: "typing", agentId: "a", active: true });
+  state = chatReducer(state, { type: "message", message: { ...reply("current", "a", "New reply", 3), streaming: true } });
+  state = chatReducer(state, { type: "error", agentId: "a", clientMessageId: "old", turnEnded: true, message: "Earlier turn failed" });
+  assert.equal(state.messagesByAgent.a[0].failed, true);
+  assert.equal(isAgentWorking(state, "a"), true);
+  assert.notEqual(state.errors[0].turnEnded, true, "the reducer must retain its own correlation decision");
+  state = chatReducer(state, { type: "message", message: user("old", 1) });
+  assert.equal(state.errors.length, 0);
+  assert.equal(state.messagesByAgent.a[0].failed, false);
+  assert.equal(state.messagesByAgent.a.at(-1)?.streaming, true);
+});
+
 test("drafts belong to agents and switching identity clears old channel data", () => {
   let state = initial();
   state = chatReducer(state, { type: "draft", agentId: "a", text: "Draft A" });
