@@ -1,18 +1,23 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { ChevronRight, Plus, RefreshCw, X } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStore } from "@/lib/store";
 import { BlobAvatar } from "@/components/BlobAvatar";
+import { cn } from "@/lib/cn";
+
+const CIRCLE = "h-11 w-11 items-center justify-center rounded-full bg-raised active:bg-raised-hover";
+const ICON = "#d4d4d4";
+const ACTIONS = { start: "Start session", stop: "Stop session", new: "New session" } as const;
 
 export default function BotsScreen() {
-  const { agents, selectedId, selectAgent, settings, profiles, sessions, sessionAction, reconnect, connection } = useStore();
+  const { agents, selectedId, selectAgent, sessions, sessionAction, reconnect, connection } = useStore();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const profile = profiles.find((row) => row.id === settings.profileId);
   const selected = agents.find((row) => row.id === selectedId);
   useEffect(() => {
     if (!selectedId) return;
@@ -20,7 +25,7 @@ export default function BotsScreen() {
     void sessionAction(selectedId, "status").catch((cause: Error) => { if (!cancelled) setError(cause.message); });
     return () => { cancelled = true; };
   }, [selectedId, sessionAction]);
-  async function operate(action: "start" | "stop" | "new") {
+  async function operate(action: keyof typeof ACTIONS) {
     if (!selected || pending) return;
     setPending(action); setError(null); setNotice(null);
     try {
@@ -29,39 +34,51 @@ export default function BotsScreen() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update this session."); }
     finally { setPending(null); }
   }
-  return <ScrollView className="flex-1 bg-app" contentContainerStyle={{ padding: 20, paddingTop: Math.max(insets.top, 20), paddingBottom: Math.max(insets.bottom, 20), maxWidth: 760, width: "100%", alignSelf: "center" }}>
-    <View className="mb-5 flex-row items-center justify-between gap-3">
-      <View className="min-w-0 flex-1"><Text accessibilityRole="header" className="text-[24px] font-semibold text-ink">Your bots</Text>
-        <Text className="mt-2 text-[13px] text-ink-secondary">{settings.useMockChannel ? "Demo workspace" : profile?.label ?? settings.zakuraBaseUrl} · {agents.length} authorized</Text></View>
-      <Pressable accessibilityRole="button" accessibilityLabel="Close bot manager" onPress={() => router.dismissTo("/")} className="min-h-11 justify-center px-3"><Text className="text-ink">Done</Text></Pressable>
+  const capabilities = selected?.capabilities
+    ? [selected.capabilities.files && "Files", selected.capabilities.desktop && "Desktop", selected.capabilities.interactions && "Questions & approvals"].filter(Boolean).join(" · ") : "";
+  return <ScrollView className="flex-1 bg-app" contentContainerStyle={{ padding: 16, paddingTop: Math.max(insets.top, 12), paddingBottom: Math.max(insets.bottom, 24), maxWidth: 680, width: "100%", alignSelf: "center" }}>
+    <View className="mb-4 flex-row items-center justify-between">
+      <Pressable accessibilityRole="button" accessibilityLabel="Close bot manager" onPress={() => router.dismissTo("/")} className={CIRCLE}><X size={20} color={ICON} /></Pressable>
+      <View className="flex-row gap-2">
+        <Pressable accessibilityRole="button" accessibilityLabel="Refresh bots" onPress={() => { void reconnect(); }} className={CIRCLE}><RefreshCw size={18} color={ICON} /></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Authorize bots" onPress={() => router.push("/login")} className={CIRCLE}><Plus size={22} color={ICON} /></Pressable>
+      </View>
     </View>
-    <View className="mb-5 flex-row gap-3">
-      <Pressable accessibilityRole="button" accessibilityLabel="Refresh bots" onPress={() => { void reconnect(); }} className="min-h-11 justify-center rounded-xl border border-hairline px-4"><Text className="text-ink">Refresh bots</Text></Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel="Authorize more bots" onPress={() => router.push("/login")} className="min-h-11 justify-center rounded-xl border border-hairline px-4"><Text className="text-ink">Authorize bots</Text></Pressable>
+    <Text accessibilityRole="header" className="mb-2 px-4 text-[13px] text-ink-secondary">Bots</Text>
+    <View className="mb-4 overflow-hidden rounded-3xl bg-panel">
+      {!agents.length ? <Text className="px-4 py-5 text-[15px] text-ink-secondary">No bots yet</Text> : null}
+      {agents.map((agent, index) => <Pressable key={agent.id} accessibilityRole="button" accessibilityLabel={`Manage ${agent.name}`} onPress={() => { selectAgent(agent.id); setNotice(null); setError(null); }}
+        className="active:bg-raised/40">
+        <View className={cn("mx-4 flex-row items-center gap-3 py-3", index > 0 && "border-t border-hairline")}>
+          <BlobAvatar name={agent.name} color={agent.color} size={44} />
+          <View className="min-w-0 flex-1">
+            <Text className="text-[17px] text-ink" numberOfLines={1}>{agent.name}</Text>
+            {agent.title ? <Text className="mt-0.5 text-[13px] text-ink-secondary" numberOfLines={1}>{agent.title}</Text> : null}
+          </View>
+          {agent.id === selectedId ? <View className="h-2 w-2 rounded-full bg-success" /> : <ChevronRight size={18} color="#8a8a8a" />}
+        </View>
+      </Pressable>)}
     </View>
-    {!agents.length ? <Text className="my-5 text-ink-secondary">No bots are available. Add an enabled Zakura Bot binding in your tenant and authorize this device.</Text> : null}
-    {agents.map((agent) => <Pressable key={agent.id} accessibilityRole="button" accessibilityLabel={`Manage ${agent.name}`} onPress={() => { selectAgent(agent.id); setNotice(null); setError(null); }}
-      className={`mb-2 flex-row items-center gap-3 rounded-2xl border p-4 ${agent.id === selectedId ? "border-accent bg-raised" : "border-hairline bg-panel"}`}>
-      <BlobAvatar name={agent.name} color={agent.color} size={42} /><View className="min-w-0 flex-1"><Text className="font-semibold text-ink">{agent.name}</Text>
-        <Text className="mt-1 text-[13px] text-ink-secondary">{agent.title ?? "Zakura agent"} · {agent.status}</Text></View>
-    </Pressable>)}
-    {selected ? <View className="mt-5 gap-3 rounded-2xl border border-hairline bg-panel p-5">
-      <Text accessibilityRole="header" className="text-[20px] font-semibold text-ink">{selected.name} details</Text>
-      <Text className="text-[14px] leading-6 text-ink-secondary">{selected.description || selected.title || "A bot authorized for this device."}</Text>
-      <Text selectable className="text-[12px] text-ink-secondary">Binding: {selected.bindingId ?? sessions[selected.id]?.bindingId ?? "Provided by Zakura"}</Text>
-      <Text className="text-[14px] text-ink">Session: {sessions[selected.id]?.status?.replace("_", " ") ?? "Loading…"}</Text>
-      {selected.capabilities ? <Text className="text-[13px] text-ink-secondary">{[selected.capabilities.files && "Files", selected.capabilities.desktop && "Desktop", selected.capabilities.interactions && "Questions & approvals"].filter(Boolean).join(" · ")}</Text> : null}
-      <Pressable accessibilityRole="button" accessibilityLabel="Open bot conversation" onPress={() => router.dismissTo("/")} className="min-h-11 items-center justify-center rounded-xl bg-accent p-3"><Text className="font-semibold text-app">Open conversation</Text></Pressable>
-      <View className="flex-row flex-wrap gap-3">
-        {(["start", "stop", "new"] as const).map((action) => <Pressable key={action} disabled={!!pending || connection !== "connected" || selected.status === "offline"}
-          accessibilityRole="button" accessibilityLabel={action === "start" ? "Start session" : action === "stop" ? "Stop session" : "New session"} onPress={() => void operate(action)}
-          className="min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline px-4">
-          {pending === action ? <ActivityIndicator size="small" /> : null}<Text className="text-ink">{action === "start" ? "Start session" : action === "stop" ? "Stop session" : "New session"}</Text>
+    {selected ? <>
+      <Text accessibilityRole="header" className="mb-2 px-4 text-[13px] text-ink-secondary" numberOfLines={1}>{selected.name}</Text>
+      <View className="mb-4 overflow-hidden rounded-3xl bg-panel">
+        {selected.description || selected.title ? <Text className="px-4 pt-4 text-[15px] leading-6 text-ink">{selected.description || selected.title}</Text> : null}
+        <Text selectable className="px-4 pt-3 text-[13px] text-ink-secondary">Binding: {selected.bindingId ?? sessions[selected.id]?.bindingId ?? "Provided by Zakura"}</Text>
+        {capabilities ? <Text className="px-4 pt-1 text-[13px] text-ink-secondary">{capabilities}</Text> : null}
+        <Text className="px-4 pb-4 pt-3 text-[15px] text-ink">Session: {sessions[selected.id]?.status?.replace("_", " ") ?? "Loading…"}</Text>
+        {(Object.keys(ACTIONS) as Array<keyof typeof ACTIONS>).map((action) => <Pressable key={action} disabled={!!pending || connection !== "connected" || selected.status === "offline"}
+          accessibilityRole="button" accessibilityLabel={ACTIONS[action]} onPress={() => void operate(action)} className="active:bg-raised/40">
+          <View className="mx-4 min-h-14 flex-row items-center justify-between border-t border-hairline py-3">
+            <Text className="text-[17px] text-ink">{ACTIONS[action]}</Text>
+            {pending === action ? <ActivityIndicator size="small" color="#b3b3b3" /> : <ChevronRight size={18} color="#8a8a8a" />}
+          </View>
         </Pressable>)}
       </View>
-      <Text className="text-[12px] leading-5 text-ink-secondary">New session resets the bot’s context. Earlier messages remain in your transcript.</Text>
-    </View> : null}
-    {notice ? <Text accessibilityLiveRegion="polite" className="mt-4 text-success">{notice}</Text> : null}
-    {error ? <Text accessibilityRole="alert" className="mt-4 text-danger">{error}</Text> : null}
+      <Pressable accessibilityRole="button" accessibilityLabel="Open bot conversation" onPress={() => router.dismissTo("/")} className="min-h-12 items-center justify-center rounded-full bg-ink py-3 active:opacity-80">
+        <Text className="text-[16px] font-semibold text-app">Open conversation</Text>
+      </Pressable>
+    </> : null}
+    {notice ? <Text accessibilityLiveRegion="polite" className="mt-4 px-4 text-[13px] text-success">{notice}</Text> : null}
+    {error ? <Text accessibilityRole="alert" className="mt-4 px-4 text-[13px] text-danger">{error}</Text> : null}
   </ScrollView>;
 }

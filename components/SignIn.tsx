@@ -71,20 +71,26 @@ export function SignIn() {
   }
   return <ScrollView className="flex-1 bg-app" keyboardShouldPersistTaps="handled"
     contentContainerStyle={{ padding: 24, paddingTop: Math.max(insets.top, 48), paddingBottom: Math.max(insets.bottom, 24), maxWidth: 560, width: "100%", alignSelf: "center" }}>
-    <Text className="text-[28px] font-semibold text-ink" accessibilityRole="header">Connect to Zakura</Text>
-    <Text className="mb-7 mt-3 text-[15px] leading-6 text-ink-secondary">Sign in to your instance, choose your bots, and bring their conversations with you.</Text>
-    <Text className="mb-2 text-[14px] text-ink">Zakura instance URL</Text>
-    <TextInput value={url} onChangeText={setUrl} editable={!busy && !grant} accessibilityLabel="Zakura instance URL"
-      autoCapitalize="none" autoCorrect={false} keyboardType="url" placeholder="https://zakura.example.com" placeholderTextColor="#a3a3a3"
-      className="mb-5 min-h-11 rounded-xl border border-hairline bg-panel px-4 py-3 text-[15px] text-ink" />
-    <Text className="mb-2 text-[14px] text-ink">Device name</Text>
-    <TextInput value={name} onChangeText={setName} editable={!busy && !grant} maxLength={128} accessibilityLabel="Device name"
-      className="mb-5 min-h-11 rounded-xl border border-hairline bg-panel px-4 py-3 text-[15px] text-ink" />
-    {grant ? <View className="mb-5 gap-3 rounded-2xl border border-hairline bg-panel p-5">
+    <View className="mb-8 items-center"><View className="h-16 w-16 rounded-full bg-ink" /></View>
+    <Text className="mb-6 text-center text-[24px] font-medium text-ink" accessibilityRole="header">Connect to Zakura</Text>
+    <View className="mb-5 overflow-hidden rounded-3xl bg-panel">
+      <View className="mx-4 min-h-14 flex-row items-center gap-4 py-2">
+        <Text className="text-[16px] text-ink">Instance</Text>
+        <TextInput value={url} onChangeText={setUrl} editable={!busy && !grant} accessibilityLabel="Zakura instance URL"
+          autoCapitalize="none" autoCorrect={false} keyboardType="url" placeholder="https://zakura.example.com" placeholderTextColor="#8a8a8a"
+          className="min-h-11 min-w-0 flex-1 text-right text-[16px] text-ink" />
+      </View>
+      <View className="mx-4 min-h-14 flex-row items-center gap-4 border-t border-hairline py-2">
+        <Text className="text-[16px] text-ink">Device</Text>
+        <TextInput value={name} onChangeText={setName} editable={!busy && !grant} maxLength={128} accessibilityLabel="Device name"
+          className="min-h-11 min-w-0 flex-1 text-right text-[16px] text-ink" />
+      </View>
+    </View>
+    {grant ? <View className="mb-5 gap-3 rounded-3xl bg-panel p-5">
       <Text className="text-[14px] text-ink-secondary">Confirm this code in Zakura</Text>
       <Text selectable className="text-[28px] font-semibold text-ink">{grant.data.user_code}</Text>
-      <Text accessibilityLiveRegion="polite" className="text-[14px] text-ink-secondary">Waiting for authorization… Return here after choosing your bots.</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Open Zakura authorization" className="min-h-11 justify-center rounded-xl bg-accent px-4"
+      <Text accessibilityLiveRegion="polite" className="text-[14px] text-ink-secondary">Waiting for authorization…</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Open Zakura authorization" className="min-h-11 justify-center rounded-full bg-ink px-4"
         onPress={() => { void WebBrowser.openBrowserAsync(grant.data.verification_uri_complete); }}>
         <Text className="text-center font-semibold text-app">Open Zakura authorization</Text>
       </Pressable>
@@ -92,15 +98,16 @@ export function SignIn() {
         <Text className="text-center text-ink-secondary">Cancel login</Text>
       </Pressable>
     </View> : <Pressable onPress={() => void begin()} disabled={busy} accessibilityRole="button" accessibilityLabel="Sign in with Zakura"
-      className="min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3">
+      className="min-h-12 flex-row items-center justify-center gap-2 rounded-full bg-ink px-4 py-3">
       {busy ? <ActivityIndicator color="#070707" /> : null}<Text className="font-semibold text-app">{busy ? "Connecting…" : "Sign in with Zakura"}</Text>
     </Pressable>}
     {error || authNotice ? <Text accessibilityRole="alert" className="my-4 text-[14px] leading-6 text-danger">{error ?? authNotice}</Text> : null}
-    {profiles.length ? <View className="mt-6 gap-2">
-      <Text className="text-[14px] font-semibold text-ink">Saved instances</Text>
-      {profiles.map((profile) => <Pressable key={profile.id} onPress={() => void choose(profile.id)} accessibilityRole="button"
-        accessibilityLabel={`Switch to ${profile.label}`} className="min-h-12 rounded-xl border border-hairline bg-panel p-3">
-        <Text className="text-ink">{profile.label}</Text><Text className="mt-1 text-[12px] text-ink-secondary">{profile.baseUrl}</Text>
+    {profiles.length ? <View className="mt-6 overflow-hidden rounded-3xl bg-panel">
+      {profiles.map((profile, index) => <Pressable key={profile.id} onPress={() => void choose(profile.id)} accessibilityRole="button"
+        accessibilityLabel={`Switch to ${profile.label}`} className="active:bg-raised/40">
+        <View className={`mx-4 min-h-14 justify-center py-3 ${index > 0 ? "border-t border-hairline" : ""}`}>
+          <Text className="text-[16px] text-ink" numberOfLines={1}>{profile.label}</Text><Text className="mt-0.5 text-[13px] text-ink-secondary" numberOfLines={1}>{profile.baseUrl}</Text>
+        </View>
       </Pressable>)}
     </View> : null}
     <Pressable accessibilityRole="button" accessibilityLabel="Try demo" className="mt-6 min-h-11 items-center justify-center"
@@ -108,7 +115,7 @@ export function SignIn() {
       <Text className="text-[14px] text-ink-secondary">Try demo</Text>
     </Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel="Advanced connection settings" className="min-h-11 items-center justify-center" onPress={() => router.push("/settings")}>
-      <Text className="text-[13px] text-ink-secondary">Advanced · manual device token</Text>
+      <Text className="text-[13px] text-ink-secondary">Advanced</Text>
     </Pressable>
   </ScrollView>;
 }

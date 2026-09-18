@@ -148,25 +148,23 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   return (
     <View className="px-4 pt-2" style={{ paddingBottom: Math.max(bottomInset, 12) }}>
       {pendingRequests > 0 ? <Pressable onPress={onReviewRequest} accessibilityRole="button" accessibilityLabel="Review pending request"
-        className="mx-auto mb-2 min-h-11 flex-row items-center gap-2 rounded-full bg-panel px-3 py-2">
+        className="mx-auto mb-2 min-h-11 flex-row items-center gap-2 rounded-full bg-raised px-4 py-2">
         <Text className="text-[12px] text-ink-secondary">{pendingRequests === 1 ? "Reply needed" : `${pendingRequests} replies needed`}</Text>
       </Pressable> : null}
       <AttachmentTray rows={attachments} remove={(id) => clearAttachments(selectedId, [id])} retry={(id) => retryAttachment(selectedId, id)} />
-      {attachmentMenu ? <View className="mx-auto mb-2 w-full max-w-3xl flex-row flex-wrap gap-2 rounded-xl border border-hairline bg-panel p-2">
+      {attachmentMenu ? <View className="mx-auto mb-2 w-full max-w-3xl flex-row flex-wrap gap-2 rounded-2xl bg-panel p-2">
         <Pressable accessibilityRole="button" accessibilityLabel="Choose photos" onPress={() => void chooseFiles(true)} className="min-h-11 justify-center rounded-lg px-4"><Text className="text-ink">Photos</Text></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Choose files" onPress={() => void chooseFiles(false)} className="min-h-11 justify-center rounded-lg px-4"><Text className="text-ink">Files</Text></Pressable>
         <Text className="self-center px-3 text-[12px] text-ink-secondary">Up to 8 files · 16 MiB each</Text>
       </View> : null}
       {pickerError ? <Text accessibilityRole="alert" className="mx-auto mb-2 w-full max-w-3xl text-[12px] text-danger">{pickerError}</Text> : null}
-      <View className={cn(
-        "mx-auto w-full max-w-3xl flex-row items-end gap-1 rounded-[26px] border bg-raised/80 p-1.5",
-        focused ? "border-accent-border" : "border-hairline",
-      )}>
+      <View className="mx-auto w-full max-w-3xl flex-row items-end gap-2">
         <Pressable disabled={!filesAvailable || offline || picking} onPress={() => setAttachmentMenu((visible) => !visible)}
-          className={cn("h-11 w-11 shrink-0 items-center justify-center rounded-full", (!filesAvailable || offline) && "opacity-40")}
+          className={cn("h-11 w-11 shrink-0 items-center justify-center rounded-full bg-raised active:bg-raised-hover", (!filesAvailable || offline) && "opacity-40")}
           accessibilityRole="button" accessibilityLabel={filesAvailable ? "Add attachments" : "File uploads unavailable for this bot"} accessibilityState={{ disabled: !filesAvailable || offline || picking }}>
-          <Plus size={20} color="#b8b8b8" />
+          <Plus size={22} color="#d4d4d4" />
         </Pressable>
+        <View className={cn("min-h-11 min-w-0 flex-1 flex-row items-center rounded-[24px] px-4", focused ? "bg-raised-hover" : "bg-raised")}>
         <TextInput
           ref={inputRef}
           value={text}
@@ -178,11 +176,11 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onContentSizeChange={Platform.OS === "web" ? undefined : (event) => setHeight(Math.max(44, event.nativeEvent.contentSize.height))}
-          placeholder={busy ? "Next message…" : "Message…"}
-          placeholderTextColor="#a3a3a3"
+          placeholder={`Ask ${agentName}`}
+          placeholderTextColor="#8f8f8f"
           accessibilityLabel={`Message ${agentName}`}
           accessibilityHint={offline ? "You can write a draft; sending is unavailable while offline." : hint}
-          className="min-w-0 flex-1 rounded-xl px-1 py-3 text-[15px] leading-5 text-ink"
+          className="min-w-0 flex-1 py-3 text-[16px] leading-5 text-ink"
           style={{ height: Math.min(height, maxInputHeight), maxHeight: maxInputHeight, textAlignVertical: "top" }}
           maxLength={MAX_MESSAGE_LENGTH}
           multiline
@@ -206,6 +204,7 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
             }
           }}
         />
+        </View>
         {busy ? (
           <Pressable key="stop" ref={setActionRef} onPress={() => {
             // Disabling the pending Stop button blurs it before its eventual
@@ -216,13 +215,13 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
             className="h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink active:opacity-80"
             accessibilityRole="button" accessibilityLabel={stopping ? "Stopping reply" : "Stop generating"}
             aria-busy={stopping} accessibilityState={{ disabled: offline || stopping, busy: stopping }}>
-            {stopping ? <ActivityIndicator size="small" color="#070707" /> : <Square size={14} color="#070707" fill="#070707" />}
+            {stopping ? <ActivityIndicator size="small" color="#070707" /> : <Square size={16} color="#070707" fill="#070707" />}
           </Pressable>
         ) : (
           <Pressable key="send" ref={setActionRef} onPress={() => void submit()} disabled={!canSend}
-            className={cn("h-11 w-11 shrink-0 items-center justify-center rounded-full", canSend ? "bg-accent active:opacity-80" : "bg-raised-hover")}
+            className={cn("h-11 w-11 shrink-0 items-center justify-center rounded-full", canSend ? "bg-ink active:opacity-80" : "bg-raised")}
             accessibilityRole="button" accessibilityLabel="Send message" aria-busy={sendingMessage} accessibilityState={{ disabled: !canSend, busy: sendingMessage }}>
-            {sendingMessage ? <ActivityIndicator size="small" color="#a3a3a3" /> : <ArrowUp size={20} color={canSend ? "#fcfcfc" : "#a3a3a3"} />}
+            {sendingMessage ? <ActivityIndicator size="small" color="#a3a3a3" /> : <ArrowUp size={22} color={canSend ? "#070707" : "#8f8f8f"} />}
           </Pressable>
         )}
       </View>
