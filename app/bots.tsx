@@ -31,35 +31,32 @@ export default function BotsScreen() {
   }
   return <ScrollView className="flex-1 bg-app" contentContainerStyle={{ padding: 20, paddingTop: Math.max(insets.top, 20), paddingBottom: Math.max(insets.bottom, 20), maxWidth: 760, width: "100%", alignSelf: "center" }}>
     <View className="mb-5 flex-row items-center justify-between gap-3">
-      <View className="min-w-0 flex-1"><Text accessibilityRole="header" className="text-[24px] font-semibold text-ink">Your bots</Text>
-        <Text className="mt-2 text-[13px] text-ink-secondary">{settings.useMockChannel ? "Demo workspace" : profile?.label ?? settings.zakuraBaseUrl} · {agents.length} authorized</Text></View>
+      <View className="min-w-0 flex-1"><Text accessibilityRole="header" className="text-[20px] font-semibold text-ink">Bots</Text>
+        <Text className="mt-1 text-[13px] text-ink-secondary">{settings.useMockChannel ? "Demo" : profile?.label ?? settings.zakuraBaseUrl}</Text></View>
       <Pressable accessibilityRole="button" accessibilityLabel="Close bot manager" onPress={() => router.dismissTo("/")} className="min-h-11 justify-center px-3"><Text className="text-ink">Done</Text></Pressable>
     </View>
     <View className="mb-5 flex-row gap-3">
-      <Pressable accessibilityRole="button" accessibilityLabel="Refresh bots" onPress={() => { void reconnect(); }} className="min-h-11 justify-center rounded-xl border border-hairline px-4"><Text className="text-ink">Refresh bots</Text></Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel="Authorize more bots" onPress={() => router.push("/login")} className="min-h-11 justify-center rounded-xl border border-hairline px-4"><Text className="text-ink">Authorize bots</Text></Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Refresh bots" onPress={() => { void reconnect(); }} className="min-h-11 justify-center rounded-xl border border-hairline px-4"><Text className="text-ink">Refresh</Text></Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Authorize more bots" onPress={() => router.push("/login")} className="min-h-11 justify-center rounded-xl border border-hairline px-4"><Text className="text-ink">Authorize</Text></Pressable>
     </View>
-    {!agents.length ? <Text className="my-5 text-ink-secondary">No bots are available. Add an enabled Zakura Bot binding in your tenant and authorize this device.</Text> : null}
+    {!agents.length ? <Text className="my-5 text-ink-secondary">No bots</Text> : null}
     {agents.map((agent) => <Pressable key={agent.id} accessibilityRole="button" accessibilityLabel={`Manage ${agent.name}`} onPress={() => { selectAgent(agent.id); setNotice(null); setError(null); }}
-      className={`mb-2 flex-row items-center gap-3 rounded-2xl border p-4 ${agent.id === selectedId ? "border-accent bg-raised" : "border-hairline bg-panel"}`}>
-      <BlobAvatar name={agent.name} color={agent.color} size={42} /><View className="min-w-0 flex-1"><Text className="font-semibold text-ink">{agent.name}</Text>
-        <Text className="mt-1 text-[13px] text-ink-secondary">{agent.title ?? "Zakura agent"} · {agent.status}</Text></View>
+      className={`mb-1 flex-row items-center gap-3 rounded-xl px-3 py-3 ${agent.id === selectedId ? "bg-raised" : "active:bg-raised/50"}`}>
+      <BlobAvatar name={agent.name} color={agent.color} size={40} /><View className="min-w-0 flex-1"><Text className="font-semibold text-ink">{agent.name}</Text>
+        {agent.title ? <Text className="mt-1 text-[13px] text-ink-secondary">{agent.title}</Text> : null}</View>
     </Pressable>)}
-    {selected ? <View className="mt-5 gap-3 rounded-2xl border border-hairline bg-panel p-5">
-      <Text accessibilityRole="header" className="text-[20px] font-semibold text-ink">{selected.name} details</Text>
-      <Text className="text-[14px] leading-6 text-ink-secondary">{selected.description || selected.title || "A bot authorized for this device."}</Text>
+    {selected ? <View className="mt-5 gap-3">
+      {selected.description ? <Text className="text-[14px] leading-6 text-ink-secondary">{selected.description}</Text> : null}
       <Text selectable className="text-[12px] text-ink-secondary">Binding: {selected.bindingId ?? sessions[selected.id]?.bindingId ?? "Provided by Zakura"}</Text>
       <Text className="text-[14px] text-ink">Session: {sessions[selected.id]?.status?.replace("_", " ") ?? "Loading…"}</Text>
-      {selected.capabilities ? <Text className="text-[13px] text-ink-secondary">{[selected.capabilities.files && "Files", selected.capabilities.desktop && "Desktop", selected.capabilities.interactions && "Questions & approvals"].filter(Boolean).join(" · ")}</Text> : null}
-      <Pressable accessibilityRole="button" accessibilityLabel="Open bot conversation" onPress={() => router.dismissTo("/")} className="min-h-11 items-center justify-center rounded-xl bg-accent p-3"><Text className="font-semibold text-app">Open conversation</Text></Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Open bot conversation" onPress={() => router.dismissTo("/")} className="min-h-11 items-center justify-center rounded-xl bg-accent p-3"><Text className="font-semibold text-app">Open</Text></Pressable>
       <View className="flex-row flex-wrap gap-3">
         {(["start", "stop", "new"] as const).map((action) => <Pressable key={action} disabled={!!pending || connection !== "connected" || selected.status === "offline"}
           accessibilityRole="button" accessibilityLabel={action === "start" ? "Start session" : action === "stop" ? "Stop session" : "New session"} onPress={() => void operate(action)}
           className="min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline px-4">
-          {pending === action ? <ActivityIndicator size="small" /> : null}<Text className="text-ink">{action === "start" ? "Start session" : action === "stop" ? "Stop session" : "New session"}</Text>
+          {pending === action ? <ActivityIndicator size="small" /> : null}<Text className="text-ink">{action === "start" ? "Start" : action === "stop" ? "Stop" : "New"}</Text>
         </Pressable>)}
       </View>
-      <Text className="text-[12px] leading-5 text-ink-secondary">New session resets the bot’s context. Earlier messages remain in your transcript.</Text>
     </View> : null}
     {notice ? <Text accessibilityLiveRegion="polite" className="mt-4 text-success">{notice}</Text> : null}
     {error ? <Text accessibilityRole="alert" className="mt-4 text-danger">{error}</Text> : null}

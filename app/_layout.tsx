@@ -46,11 +46,7 @@ export default function RootLayout() {
             name="settings"
             options={{
               presentation: "modal",
-              headerShown: true,
-              headerTitle: "Settings",
-              headerStyle: { backgroundColor: "#111111" },
-              headerTintColor: "#fcfcfc",
-              headerShadowVisible: false,
+              headerShown: false,
             }}
           />
         </Stack>

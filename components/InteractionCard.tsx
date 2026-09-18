@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import type { ChatMessage, InteractionAnswer, MessageInteraction } from "@/lib/types";
 import { interactionPending, interactionStatus, prepareInteractionAnswer } from "@/lib/interactions";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import { ExternalLink } from "./ExternalLink";
+import { Field } from "@/components/ui/Field";
 
 export function InteractionCard({ message }: { message: ChatMessage & { interaction: MessageInteraction } }) {
   const { connection, agents, respondInteraction, refreshInteraction } = useStore();
@@ -74,28 +75,29 @@ export function InteractionCard({ message }: { message: ChatMessage & { interact
             onPress={() => setSelected((previous) => previous.includes(option.id) ? previous.filter((id) => id !== option.id)
               : interaction.allowMultiple ? [...previous, option.id] : [option.id])}
             className={cn("rounded-lg border px-3 py-2.5", selected.includes(option.id) ? "border-accent bg-accent/15" : "border-hairline bg-panel", disabled && "opacity-50")}>
-            <Text className="text-[14px] text-ink">{selected.includes(option.id) ? "✓ " : ""}{option.label}</Text>
+            <Text className="text-[14px] text-ink">{option.label}</Text>
           </Pressable>)}</View>
         </> : null}
-        <TextInput value={text} onChangeText={setText} editable={!disabled} secureTextEntry={interaction.secret}
+        <Field value={text} onChangeText={setText} editable={!disabled} secureTextEntry={interaction.secret}
           multiline={!interaction.secret} autoCapitalize="none" autoCorrect={!interaction.secret} maxLength={8000}
           accessibilityLabel={interaction.secret ? "Private answer" : "Your answer"}
-          placeholder={interaction.secret ? "Private answer…" : "Answer…"}
-          placeholderTextColor="#a3a3a3" className="min-h-11 rounded-lg border border-hairline bg-panel px-3 py-2.5 text-[14px] text-ink" />
+          placeholder={interaction.secret ? "Private answer…" : "Answer…"} />
       </> : <>
         {interaction.url ? <ExternalLink url={interaction.url} label="Open request" buttonStyle="primary" /> : null}
-        {interaction.fields?.map((field) => <View key={field.id} className="gap-2">
-          <Text className="text-[13px] text-ink">{field.title || field.id}{field.required ? " *" : ""}</Text>
-          {field.type === "boolean" ? <View className="flex-row gap-2">{[true, false].map((value) => <Choice key={String(value)}
+        {interaction.fields?.map((field) => <View key={field.id} className="gap-1">
+          {field.type === "boolean" ? <>
+            <Text className="pl-2.5 text-[13px] text-ink-secondary">{field.title || field.id}{field.required ? " *" : ""}</Text>
+            <View className="flex-row gap-2">{[true, false].map((value) => <Choice key={String(value)}
             label={value ? "Yes" : "No"} checked={fields[field.id] === value} disabled={disabled}
             onPress={() => setFields((previous) => ({ ...previous, [field.id]: value }))} />)}</View>
-            : field.options?.length ? <View className="flex-row flex-wrap gap-2">{field.options.map((option) => <Choice key={option}
+          </> : field.options?.length ? <>
+            <Text className="pl-2.5 text-[13px] text-ink-secondary">{field.title || field.id}{field.required ? " *" : ""}</Text>
+            <View className="flex-row flex-wrap gap-2">{field.options.map((option) => <Choice key={option}
               label={option} checked={fields[field.id] === option} disabled={disabled}
               onPress={() => setFields((previous) => ({ ...previous, [field.id]: option }))} />)}</View>
-              : <TextInput value={String(fields[field.id] ?? "")} onChangeText={(value) => setFields((previous) => ({ ...previous, [field.id]: value }))}
+          </> : <Field label={`${field.title || field.id}${field.required ? " *" : ""}`} value={String(fields[field.id] ?? "")} onChangeText={(value) => setFields((previous) => ({ ...previous, [field.id]: value }))}
                 editable={!disabled} accessibilityLabel={field.title || field.id} multiline={field.type === "array"} maxLength={8000}
-                placeholder={field.type === "array" ? "One item per line" : field.type === "integer" ? "Whole number" : field.type === "number" ? "Number" : "Enter a value"}
-                placeholderTextColor="#a3a3a3" className="min-h-11 rounded-lg border border-hairline bg-panel px-3 py-2.5 text-[14px] text-ink" />}
+                placeholder={field.type === "array" ? "One item per line" : field.type === "integer" ? "Whole number" : field.type === "number" ? "Number" : "Enter a value"} />}
         </View>)}
         {unsupportedForm ? <Text className="text-[12px] text-warning">Open in Zakura</Text> : null}
       </>}
@@ -125,6 +127,6 @@ function Action({ label, disabled, onPress, danger, primary }: {
 function Choice({ label, checked, disabled, onPress }: { label: string; checked: boolean; disabled: boolean; onPress: () => void }) {
   return <Pressable accessibilityRole="radio" accessibilityLabel={label} accessibilityState={{ checked, disabled }} disabled={disabled} onPress={onPress}
     className={cn("min-h-11 justify-center rounded-lg border px-3 py-2", checked ? "border-accent bg-accent/15" : "border-hairline bg-panel")}>
-    <Text className="text-[13px] text-ink">{checked ? "✓ " : ""}{label}</Text>
+    <Text className="text-[13px] text-ink">{label}</Text>
   </Pressable>;
 }

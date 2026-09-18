@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
-import { ArrowDown, Menu, MessageCircle, Settings, Info, Monitor } from "lucide-react-native";
+import { ArrowDown, Menu, Settings, Monitor } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
@@ -49,7 +49,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const viewportHeight = useRef(0);
   const contentHeight = useRef(0);
   const [historyStart, setHistoryStart] = useState<HistoryStart | null>(null);
-  const [historyNotice, setHistoryNotice] = useState("");
+  const [loadedCount, setLoadedCount] = useState(0);
   const [attachmentNoticeAgent, setAttachmentNoticeAgent] = useState<string | null>(null);
   const attachmentNotice = !!selectedId && attachmentNoticeAgent === selectedId;
   const setAttachmentNotice = useCallback((visible: boolean) => {
@@ -188,7 +188,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     requestPositions.current.clear();
     requestToReveal.current = null;
     setHistoryStart(null);
-    setHistoryNotice("");
+    setLoadedCount(0);
     setAttachmentNoticeAgent(null);
     setPinned(true);
     scrollToLatest();
@@ -240,8 +240,9 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
       y: node?.scrollTop ?? lastScrollY.current, element, offset: element ? element.getBoundingClientRect().top - top : undefined };
     const start = Math.max(0, visibleStart - HISTORY_PAGE_SIZE);
     pauseFollowing();
+    const loaded = visibleStart - start;
     setHistoryStart({ agentId: selectedId, id: messages[start].id });
-    setHistoryNotice(`${visibleStart - start} earlier messages loaded.`);
+    setLoadedCount(loaded);
     // The control moves above the inserted page, or disappears on the last
     // page. Keyboard reading continues from the same place in the transcript.
     focusTranscript();
@@ -275,18 +276,16 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
 
   return (
     <KeyboardAvoidingView className="min-w-0 flex-1 bg-app" behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}>
-      <View className="flex-row items-center gap-2.5 border-b border-hairline/60 px-4 pb-3"
+      <View className="flex-row items-center gap-2.5 px-4 pb-2"
         style={{ paddingTop: Math.max(insets.top, 12) }}>
         {compact ? <Pressable ref={agentListButtonRef} onPress={() => setSidebarOpen(true)} className="-ml-2 h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
           accessibilityRole="button" accessibilityLabel="Open agent list"><Menu size={21} color="#fcfcfc" /></Pressable> : null}
-        {agent ? <BlobAvatar color={agent.color} name={agent.name} size={34} /> : <MessageCircle size={28} color="#459ffe" />}
+        {agent ? <BlobAvatar color={agent.color} name={agent.name} size={32} /> : null}
         <View className="min-w-0 flex-1">
           <Text className="text-[15px] font-semibold text-ink" numberOfLines={1} accessibilityRole="header">{agent?.name ?? "Zakura Bot"}</Text>
         </View>
         {agent ? <Pressable onPress={() => router.push({ pathname: "/desktop", params: { agentId: agent.id } })} accessibilityRole="button" accessibilityLabel="View bot desktop"
-          className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"><Monitor size={20} color="#fcfcfc" /></Pressable> : null}
-        {agent ? <Pressable onPress={() => router.push("/bots")} accessibilityRole="button" accessibilityLabel="Bot details"
-          className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"><Info size={20} color="#fcfcfc" /></Pressable> : null}
+          className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"><Monitor size={18} color="#fcfcfc" /></Pressable> : null}
       </View>
 
       <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner onFocusLost={focusTranscript}
@@ -297,11 +296,10 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
             role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ flexGrow: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingVertical: 32 }}>
-            <MessageCircle size={40} color="#b3b3b3" />
-            <Text className="mt-5 text-center text-[20px] font-semibold text-ink">{connection === "connecting" ? "Connecting…" : "No bots yet"}</Text>
+            <Text className="text-center text-[16px] text-ink">{connection === "connecting" ? "Connecting…" : "No bots yet"}</Text>
             <Pressable onPress={() => router.push("/settings")} accessibilityRole="button" accessibilityLabel="Open connection settings"
-              className="mt-6 min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-raised px-4 py-3 active:bg-raised-hover">
-              <Settings size={16} color="#fcfcfc" /><Text className="text-[14px] text-ink">Settings</Text>
+              className="mt-4 min-h-11 items-center justify-center px-4">
+              <Text className="text-[14px] text-ink-secondary">Settings</Text>
             </Pressable>
           </ScrollView>
         ) : <>
@@ -318,21 +316,23 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
               keyboardDismissMode={Platform.OS === "web" ? "none" : Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
               contentContainerStyle={{ paddingTop: 8, paddingBottom: 20, paddingHorizontal: compact ? 12 : 24,
                 maxWidth: 900, width: "100%", alignSelf: "center", flexGrow: rows.length === 0 ? 1 : undefined }}>
-              {visibleStart > 0 || historyNotice ? <View className="mb-3 items-center gap-2">
+              {visibleStart > 0 || loadedCount ? <View className="mb-3 items-center gap-2">
                 {visibleStart > 0 ? <Pressable onPress={loadEarlier} accessibilityRole="button" accessibilityLabel="Load earlier messages"
-                  className="min-h-11 justify-center rounded-xl border border-hairline bg-panel px-4 py-3 active:bg-raised">
-                  <Text className="text-[13px] text-ink">Earlier messages</Text>
+                  className="min-h-11 justify-center px-4 py-2">
+                  <Text className="text-[13px] text-ink-secondary">Earlier</Text>
                 </Pressable> : null}
                 <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
-                  {historyNotice}
+                  {loadedCount > 0
+                    ? visibleStart > 0
+                      ? `${loadedCount} earlier messages loaded. ${visibleStart} more available.`
+                      : `${loadedCount} earlier messages loaded. All available history is shown.`
+                    : visibleStart > 0 ? `${visibleStart} earlier messages available` : ""}
                 </Text>
               </View> : null}
               {rows.length === 0 && !activeTool ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"} /> : null}
               {rows.map((row) => row.kind === "day" ? (
-                <View key={row.key} className="my-3 flex-row items-center gap-3">
-                  <View className="h-px flex-1 bg-hairline/70" />
+                <View key={row.key} className="my-3 items-center">
                   <Text className="text-[11px] text-ink-secondary">{row.label}</Text>
-                  <View className="h-px flex-1 bg-hairline/70" />
                 </View>
               ) : <View key={`message_${row.message.id}`} testID={`transcript-row-${row.message.id}`}
                 onLayout={row.message.interaction ? (event) => {
@@ -391,8 +391,8 @@ function EmptyThread({ name, color, offline }: {
 }) {
   return (
     <View className="flex-1 items-center justify-center px-4 py-12">
-      <BlobAvatar color={color} name={name} size={64} />
-      <Text className="mt-5 w-full text-center text-[20px] font-semibold text-ink" numberOfLines={2}>{name}</Text>
+      <BlobAvatar color={color} name={name} size={56} />
+      <Text className="mt-4 w-full text-center text-[18px] font-semibold text-ink" numberOfLines={2}>{name}</Text>
       {offline ? <Text className="mt-2 text-[13px] text-ink-secondary">Offline</Text> : null}
     </View>
   );

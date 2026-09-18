@@ -42,7 +42,7 @@ export function StatusBanner({ onFocusLost, notice }: {
         tone="danger"
         contentKey={contentKey}
         onFocusLost={onFocusLost}
-        icon={<WifiOff size={14} color="#ff5667" />}
+        icon={<WifiOff size={14} color="#b3b3b3" />}
         action={
           <View className="flex-row gap-1"><Pressable
             onPress={() => void reconnect()}
@@ -73,7 +73,7 @@ export function StatusBanner({ onFocusLost, notice }: {
       tone="warning"
       contentKey={contentKey}
       onFocusLost={onFocusLost}
-      icon={<AlertTriangle size={14} color="#ff9800" />}
+      icon={<AlertTriangle size={14} color="#b3b3b3" />}
       action={
         <Pressable
           onPress={notice ? notice.onDismiss : dismissError}

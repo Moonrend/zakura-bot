@@ -74,26 +74,22 @@ function DesktopView({ agent }: { agent: Agent }) {
     : !enabled || info?.enabled === false ? "Enable Computer for this bot in Zakura, then reconnect to view its desktop."
     : info?.supported === false ? "This bot’s runtime does not support a desktop. Choose a runtime with Computer support in Zakura." : null;
   return <View className="gap-4">
-    <Text className="text-[14px] leading-6 text-ink-secondary">See what {agent.name} is doing on its computer. Refresh for the latest picture or turn on automatic updates.</Text>
     <View className="flex-row flex-wrap items-center gap-3">
       <Pressable accessibilityRole="button" accessibilityLabel="Refresh desktop" disabled={!enabled || loading} onPress={() => void refresh(true)} className="min-h-11 flex-row items-center gap-2 rounded-xl bg-accent px-4">
         {loading ? <ActivityIndicator size="small" color="#fcfcfc" /> : <RefreshCw size={16} color="#fcfcfc" />}<Text className="font-semibold text-ink">{loading ? "Refreshing…" : "Refresh"}</Text>
       </Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel={automatic ? "Pause desktop updates" : "Enable desktop updates"} disabled={!enabled || !!unavailable}
-        onPress={() => setAutomatic((value) => !value)} className="min-h-11 justify-center rounded-xl border border-hairline px-4"><Text className="text-ink">{automatic ? "Pause updates" : "Auto-refresh"}</Text></Pressable>
-      <Text className="text-[12px] text-ink-secondary">{automatic ? "Updates while this page is visible" : "Manual refresh"}</Text>
+        onPress={() => setAutomatic((value) => !value)} className="min-h-11 justify-center rounded-xl border border-hairline px-4"><Text className="text-ink">{automatic ? "Pause" : "Auto"}</Text></Pressable>
     </View>
-    {error ? <View className="rounded-xl border border-danger/40 bg-panel p-4"><Text accessibilityRole="alert" className="text-danger">{error}</Text>
-      <Text className="mt-2 text-[12px] text-ink-secondary">{frame ? "Showing the last successful capture. Use Refresh to try again." : "Check that the bot’s computer is available, then try Refresh."}</Text></View> : null}
-    {frame ? <View className="overflow-hidden rounded-2xl border border-hairline bg-inset">
+    {error ? <Text accessibilityRole="alert" className="text-danger">{error}</Text> : null}
+    {frame ? <View className="overflow-hidden rounded-xl border border-hairline bg-inset">
       <Image testID="desktop-frame" source={{ uri: frame.uri }} resizeMode="contain" accessibilityLabel={`${agent.name} desktop screenshot`}
         style={{ width: "100%", aspectRatio: info?.width && info?.height ? info.width / info.height : 16 / 9 }} />
       <Text className="px-4 py-3 text-[12px] text-ink-secondary">Captured {new Date(frame.capturedAt).toLocaleTimeString()}{info?.width && info.height ? ` · ${info.width} × ${info.height}` : ""}</Text>
-    </View> : <View className="min-h-64 items-center justify-center gap-4 rounded-2xl border border-hairline bg-panel p-6">
-      {loading ? <ActivityIndicator color="#1084fe" /> : <Monitor size={36} color="#a3a3a3" />}
-      <Text className="text-center text-[14px] leading-6 text-ink-secondary">{unavailable ?? (loading ? "Opening the bot’s desktop…" : "No desktop image yet. Tap Refresh to capture it.")}</Text>
+    </View> : <View className="min-h-64 items-center justify-center gap-4">
+      {loading ? <ActivityIndicator color="#1084fe" /> : <Monitor size={28} color="#a3a3a3" />}
+      <Text className="text-center text-[14px] text-ink-secondary">{unavailable ?? (loading ? "Opening…" : "No image")}</Text>
     </View>}
-    <Text className="text-[12px] text-ink-secondary">Desktop viewing is read-only. Ask your bot in chat to control its computer.</Text>
   </View>;
 }
 
@@ -105,9 +101,9 @@ export default function DesktopScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   return <ScrollView className="flex-1 bg-app" contentContainerStyle={{ padding: 20, paddingTop: Math.max(insets.top, 20), paddingBottom: Math.max(insets.bottom, 20), maxWidth: 1200, width: "100%", alignSelf: "center" }}>
-    <View className="mb-5 flex-row items-center justify-between gap-3"><Text accessibilityRole="header" className="min-w-0 flex-1 text-[24px] font-semibold text-ink">{agent ? `${agent.name} desktop` : "Bot desktop"}</Text>
+    <View className="mb-5 flex-row items-center justify-between gap-3"><Text accessibilityRole="header" className="min-w-0 flex-1 text-[20px] font-semibold text-ink">{agent ? agent.name : "Desktop"}</Text>
       <Pressable accessibilityRole="button" accessibilityLabel="Close desktop" onPress={() => router.dismissTo("/")} className="min-h-11 justify-center px-3"><Text className="text-ink">Done</Text></Pressable></View>
     {agent ? <DesktopView key={`${settings.profileId ?? settings.useMockChannel}:${agent.id}`} agent={agent} />
-      : <Text className="text-ink-secondary">{connection === "connecting" ? "Connecting to your bot…" : "This bot is no longer available. Return to your conversations and choose an authorized bot."}</Text>}
+      : <Text className="text-ink-secondary">{connection === "connecting" ? "Connecting…" : "Unavailable"}</Text>}
   </ScrollView>;
 }

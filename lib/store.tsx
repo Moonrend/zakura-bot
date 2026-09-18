@@ -506,13 +506,23 @@ export function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
+function startOfDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+}
+
 export function formatDay(ts: number): string {
   const date = new Date(ts);
-  const now = new Date();
-  const startOf = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
-  const diffDays = Math.round((startOf(now) - startOf(date)) / 86_400_000);
+  const diffDays = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86_400_000);
   if (diffDays === 0) return "Today";
   if (diffDays === 1) return "Yesterday";
+  if (diffDays > 1 && diffDays < 7) return date.toLocaleDateString(undefined, { weekday: "long" });
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric",
-    ...(date.getFullYear() !== now.getFullYear() ? { year: "numeric" as const } : {}) });
+    ...(date.getFullYear() !== new Date().getFullYear() ? { year: "numeric" as const } : {}) });
+}
+
+export function formatSidebarDate(ts: number): string {
+  const date = new Date(ts);
+  const diffDays = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86_400_000);
+  if (diffDays === 0) return formatTime(ts);
+  return formatDay(ts);
 }

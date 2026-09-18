@@ -33,7 +33,7 @@ export function MessageBubble({ message, replyTarget, onRetry, onFocusLost, retr
         <View accessibilityLabel={label} aria-busy={!!message.streaming} accessibilityState={{ busy: !!message.streaming }} className={cn(
           "min-w-0 max-w-full rounded-2xl px-4 py-2.5",
           user ? "rounded-br-md bg-bubble-user" : "rounded-bl-md bg-card",
-          message.failed && "border border-danger/60",
+          message.failed && "border border-hairline",
         )}>
           <ReplyContent message={message} replyTarget={replyTarget} onFocusLost={onFocusLost} />
         </View>

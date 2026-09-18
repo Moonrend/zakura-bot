@@ -7,7 +7,7 @@ async function mockReady(page: Page) {
   await page.goto("/");
   const demo = page.getByRole("button", { name: "Try demo", exact: true });
   if (await demo.isVisible()) await demo.click();
-  await expect(page.getByText("Mock channel · connected", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Search agents" })).toBeVisible();
 }
 async function noOverflow(page: Page) {
   // useWindowDimensions responds on the next render after a viewport resize.
@@ -129,7 +129,7 @@ for (const width of [1440, 320]) test(`settings preserves the transcript reading
     }
     if (width < 768) await menu.press("Enter");
     await settings.press("Enter");
-    await expect(page.getByRole("heading", { name: "Your connection", exact: true })).toBeFocused();
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
     await expect.poll(() => transcript.evaluate((element) => element.clientHeight)).toBe(0);
     const messageId = `offscreen-${following}`;
     channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId, createdAt: following ? 81 : 80,
@@ -308,13 +308,13 @@ for (const width of [1440, 320]) test(`settings navigation restores keyboard foc
   await input.fill("Keep this draft across settings");
   const menu = page.getByRole("button", { name: "Open agent list", exact: true });
   const openSettings = page.getByRole("button", { name: "Open settings", exact: true });
-  const heading = page.getByRole("heading", { name: "Your connection", exact: true });
+  const heading = page.getByRole("heading", { name: "Settings", exact: true });
   for (const back of [false, true]) {
     if (width < 768) await menu.press("Enter");
     await openSettings.press("Enter");
     await expect(heading).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(page.getByRole("switch", { name: "Use mock channel", exact: true })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Add instance", exact: true })).toBeFocused();
     if (back) await page.goBack();
     else await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
     await expect(width < 768 ? menu : openSettings).toBeFocused();
@@ -337,7 +337,7 @@ test("settings returns to the conversation when channel recovery removes its ope
   })), { key: settingsKey });
   await page.goto("/");
   await page.getByRole("button", { name: "Open connection settings", exact: true }).press("Enter");
-  await expect(page.getByRole("heading", { name: "Your connection", exact: true })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
   channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "idle" }] }));
   await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
   await expect(page.getByTestId("chat-transcript")).toBeFocused();
@@ -346,7 +346,7 @@ test("settings returns to the conversation when channel recovery removes its ope
 
 test("direct settings visits enter at the heading and close into keyboard-accessible chat", async ({ page }) => {
   await page.goto("/settings");
-  await expect(page.getByRole("heading", { name: "Your connection", exact: true })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
   await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
   await expect(page.getByTestId("chat-transcript")).toBeFocused();
   await expect(page.getByRole("textbox", { name: "Message Zakura", exact: true })).toHaveValue("");
@@ -357,7 +357,7 @@ test("saving settings keeps keyboard navigation through success and storage fail
   const save = page.getByRole("button", { name: "Save settings", exact: true });
   const actions = page.getByRole("group", { name: "Settings actions", exact: true });
   await save.press("Enter");
-  await expect(page.getByText("Settings saved on this device.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await expect(actions).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(save).toBeFocused();
@@ -598,7 +598,7 @@ test("successful reconnect removes stale channel warnings while failed sends rem
   await expect(page.getByText(unavailable, { exact: true })).toBeVisible();
   channel!.close({ code: 1011, reason: "temporary service failure" });
   await expect.poll(() => connections).toBe(2);
-  await expect(page.getByText("Live WS channel · connected", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Message Live", exact: true })).toBeVisible();
   await expect(page.getByText(unavailable, { exact: true })).toHaveCount(0);
   await expect(page.getByText("Delivery rejected; retry this message", { exact: true })).toBeVisible();
   await expect(retry).toBeEnabled();
@@ -2010,7 +2010,7 @@ test("equivalent live settings retain drafts, streams and pending delivery and S
   await page.getByRole("button", { name: "Open settings", exact: true }).click();
   await page.getByLabel("Zakura Base URL", { exact: true }).fill("ws://127.0.0.1:4173/api/zakurabot/ws/");
   await page.getByRole("button", { name: "Save settings", exact: true }).click();
-  await expect(page.getByText("Settings saved on this device.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await expect(input).toHaveValue("Keep my next draft");
   expect(channels).toHaveLength(1);
@@ -2032,7 +2032,7 @@ test("equivalent live settings retain drafts, streams and pending delivery and S
   await page.getByRole("button", { name: "Open settings", exact: true }).click();
   await page.getByLabel("Auth token", { exact: true }).fill("another-device-token");
   await page.getByRole("button", { name: "Save settings", exact: true }).click();
-  await expect(page.getByText("Settings saved on this device.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await expect(input).toHaveValue("");
   await expect.poll(() => channels.length).toBe(2);
@@ -2052,7 +2052,7 @@ test("saving unused live credentials keeps the current mock reply and next draft
   await page.getByLabel("Zakura Base URL", { exact: true }).fill("https://next-server.example.com");
   await page.getByLabel("Auth token", { exact: true }).fill("future-device-token");
   await page.getByRole("button", { name: "Save settings", exact: true }).click();
-  await expect(page.getByText("Settings saved on this device.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await expect(input).toHaveValue("Keep the mock draft");
   await expect(reply).not.toContainText("Stopped");
@@ -2075,7 +2075,7 @@ test("direct settings load, validation and persistence survive reload", async ({
   await page.getByLabel("Auth token", { exact: true }).fill("new-token");
   await page.getByRole("switch", { name: "Use mock channel", exact: true }).click();
   await page.getByRole("button", { name: "Save settings", exact: true }).click();
-  await expect(page.getByText("Settings saved on this device.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.reload();
   await expect(url).toHaveValue("https://new.example.com/prefix");
   await expect(page.getByLabel("Auth token", { exact: true })).toHaveValue("new-token");
@@ -2092,7 +2092,7 @@ test("storage failures do not show a false Saved result", async ({ page }) => {
   await page.evaluate(() => { Storage.prototype.setItem = () => { throw new Error("Storage quota exceeded"); }; });
   await page.getByRole("button", { name: "Save settings", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Storage quota exceeded");
-  await expect(page.getByText("Settings saved on this device.", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Saved", { exact: true })).toHaveCount(0);
 });
 
 test("live roster, rejected send retry, chat_reply cards and raw model event isolation", async ({ page }) => {
@@ -2710,8 +2710,6 @@ test("empty channel recovery remains keyboard accessible in a short narrow windo
   await page.goto("/");
   const settings = page.getByRole("button", { name: "Open connection settings", exact: true });
   await expect(page.getByText("No bots yet", { exact: true })).toBeVisible();
-  // The same heading is briefly rendered before hydration opens the socket.
-  await expect(page.getByText("Your channel has no agents yet. Check the agents assigned to your account.", { exact: true })).toBeVisible();
   await expect(settings).toBeVisible();
   channel!.send(JSON.stringify({ type: "error", fatal: true, message: "Binding unavailable. ".repeat(60) }));
   const alert = page.getByRole("alert");
