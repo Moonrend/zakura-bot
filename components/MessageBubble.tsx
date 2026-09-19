@@ -2,7 +2,6 @@ import { Pressable, Text, View } from "react-native";
 import { RotateCcw } from "lucide-react-native";
 import type { ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/cn";
-import { formatTime } from "@/lib/store";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { ActivityChip } from "./ActivityChip";
 import { ReplyContent } from "./ReplyContent";
@@ -28,19 +27,17 @@ export function MessageBubble({ message, replyTarget, onRetry, onFocusLost, retr
     ? message.failed ? "Your message failed to send" : message.pending ? "Sending your message" : "Your message"
     : message.streaming ? "Assistant is replying" : message.interrupted ? "Assistant reply stopped" : "Assistant message";
   return (
-    <View testID={`message-${message.id}`} className={cn("w-full flex-row", user ? "justify-end" : "justify-start", grouped ? "mb-1" : "mb-4")}>
+    <View testID={`message-${message.id}`} className={cn("w-full flex-row", user ? "justify-end" : "justify-start", grouped ? "mb-1.5" : "mb-3")}>
       <View className={cn("min-w-0 max-w-[90%]", user ? "items-end" : "items-start")}>
         <View accessibilityLabel={label} aria-busy={!!message.streaming} accessibilityState={{ busy: !!message.streaming }} className={cn(
-          "min-w-0 max-w-full rounded-2xl px-4 py-2.5",
-          user ? "rounded-br-md bg-bubble-user" : "rounded-bl-md bg-card",
-          message.failed && "border border-hairline",
+          "min-w-0 max-w-full rounded-[22px] px-4 py-3",
+          user ? "bg-bubble-user" : "bg-card",
+          message.failed && "border border-danger/60",
         )}>
           <ReplyContent message={message} replyTarget={replyTarget} onFocusLost={onFocusLost} />
         </View>
-        {!message.streaming && (!grouped || message.interrupted || message.pending) ? (
-          <Text className="mt-1.5 px-1 text-[11px] text-ink-secondary">
-            {message.interrupted ? "Stopped" : message.pending ? "Sending…" : formatTime(message.createdAt)}
-          </Text>
+        {!message.streaming && (message.interrupted || message.pending) ? (
+          <Text className="mt-1 px-1 text-[12px] text-ink-secondary">{message.interrupted ? "Stopped" : "Sending…"}</Text>
         ) : null}
         {message.failed ? (
           <Pressable ref={setRetryRef} onPress={() => onRetry?.(message.id)} disabled={retryDisabled || !onRetry}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
-import { ArrowDown, Menu, Settings, Monitor } from "lucide-react-native";
+import { ArrowDown, ChevronLeft, MessageCircle, Settings, Monitor } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
@@ -8,15 +8,19 @@ import { MessageBubble } from "./MessageBubble";
 import { ActivityChip } from "./ActivityChip";
 import { Composer } from "./Composer";
 import { StatusBanner } from "./StatusBanner";
-import { formatDay, useStore } from "@/lib/store";
+import { formatDay, formatTime, useStore } from "@/lib/store";
 import { previewFromMessages } from "@/lib/chat-state";
 import { useReducedMotion } from "@/lib/use-reduced-motion";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { UPLOAD_NOTICE } from "@/lib/use-file-drop-guard";
 import type { ChatMessage } from "@/lib/types";
+import { cn } from "@/lib/cn";
 import { interactionPending } from "@/lib/interactions";
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
+const CIRCLE = "h-11 w-11 shrink-0 items-center justify-center rounded-full bg-raised active:bg-raised-hover";
+const ICON = "#d4d4d4";
+const SEPARATOR_GAP = 30 * 60_000;
 const HISTORY_PAGE_SIZE = 50;
 type HistoryStart = { agentId: string; id: string };
 type HistoryAnchor = { agentId: string; height: number; y: number; element?: HTMLElement; offset?: number };
@@ -49,7 +53,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const viewportHeight = useRef(0);
   const contentHeight = useRef(0);
   const [historyStart, setHistoryStart] = useState<HistoryStart | null>(null);
-  const [loadedCount, setLoadedCount] = useState(0);
+  const [historyNotice, setHistoryNotice] = useState("");
   const [attachmentNoticeAgent, setAttachmentNoticeAgent] = useState<string | null>(null);
   const attachmentNotice = !!selectedId && attachmentNoticeAgent === selectedId;
   const setAttachmentNotice = useCallback((visible: boolean) => {
@@ -188,7 +192,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     requestPositions.current.clear();
     requestToReveal.current = null;
     setHistoryStart(null);
-    setLoadedCount(0);
+    setHistoryNotice("");
     setAttachmentNoticeAgent(null);
     setPinned(true);
     scrollToLatest();
@@ -240,9 +244,8 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
       y: node?.scrollTop ?? lastScrollY.current, element, offset: element ? element.getBoundingClientRect().top - top : undefined };
     const start = Math.max(0, visibleStart - HISTORY_PAGE_SIZE);
     pauseFollowing();
-    const loaded = visibleStart - start;
     setHistoryStart({ agentId: selectedId, id: messages[start].id });
-    setLoadedCount(loaded);
+    setHistoryNotice(`${visibleStart - start} earlier messages loaded.`);
     // The control moves above the inserted page, or disappears on the last
     // page. Keyboard reading continues from the same place in the transcript.
     focusTranscript();
@@ -276,16 +279,21 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
 
   return (
     <KeyboardAvoidingView className="min-w-0 flex-1 bg-app" behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}>
-      <View className="flex-row items-center gap-2.5 px-4 pb-2"
-        style={{ paddingTop: Math.max(insets.top, 12) }}>
-        {compact ? <Pressable ref={agentListButtonRef} onPress={() => setSidebarOpen(true)} className="-ml-2 h-11 w-11 items-center justify-center rounded-xl active:bg-raised"
-          accessibilityRole="button" accessibilityLabel="Open agent list"><Menu size={21} color="#fcfcfc" /></Pressable> : null}
-        {agent ? <BlobAvatar color={agent.color} name={agent.name} size={32} /> : null}
-        <View className="min-w-0 flex-1">
-          <Text className="text-[15px] font-semibold text-ink" numberOfLines={1} accessibilityRole="header">{agent?.name ?? "Zakura Bot"}</Text>
+      <View className="flex-row items-center gap-2 px-3 pb-2" style={{ paddingTop: Math.max(insets.top, 12) }}>
+        {compact ? <Pressable ref={agentListButtonRef} onPress={() => setSidebarOpen(true)} className={CIRCLE}
+          accessibilityRole="button" accessibilityLabel="Open agent list"><ChevronLeft size={24} color={ICON} /></Pressable> : null}
+        <View className={cn("min-w-0 flex-1 flex-row", compact ? "justify-center" : "justify-start")}>
+          {agent ? <Pressable onPress={() => router.push("/bots")} accessibilityRole="button" accessibilityLabel="Bot details"
+            className="min-h-11 max-w-full flex-row items-center gap-2.5 rounded-full bg-raised py-1 pl-1 pr-4 active:bg-raised-hover">
+            <BlobAvatar color={agent.color} name={agent.name} size={36} />
+            <Text className="min-w-0 shrink text-[17px] font-medium text-ink" numberOfLines={1}>{agent.name}</Text>
+          </Pressable> : <View className="min-h-11 flex-row items-center gap-2.5 px-2">
+            <MessageCircle size={24} color="#459ffe" />
+            <Text className="text-[17px] font-medium text-ink" accessibilityRole="header">Zakura Bot</Text>
+          </View>}
         </View>
         {agent ? <Pressable onPress={() => router.push({ pathname: "/desktop", params: { agentId: agent.id } })} accessibilityRole="button" accessibilityLabel="View bot desktop"
-          className="h-11 w-11 items-center justify-center rounded-xl active:bg-raised"><Monitor size={18} color="#fcfcfc" /></Pressable> : null}
+          className={CIRCLE}><Monitor size={20} color={ICON} /></Pressable> : compact ? <View className="h-11 w-11" /> : null}
       </View>
 
       <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner onFocusLost={focusTranscript}
@@ -296,10 +304,11 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
             role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ flexGrow: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingVertical: 32 }}>
-            <Text className="text-center text-[16px] text-ink">{connection === "connecting" ? "Connecting…" : "No bots yet"}</Text>
+            <MessageCircle size={40} color="#b3b3b3" />
+            <Text className="mt-5 text-center text-[20px] font-semibold text-ink">{connection === "connecting" ? "Connecting…" : "No bots yet"}</Text>
             <Pressable onPress={() => router.push("/settings")} accessibilityRole="button" accessibilityLabel="Open connection settings"
-              className="mt-4 min-h-11 items-center justify-center px-4">
-              <Text className="text-[14px] text-ink-secondary">Settings</Text>
+              className="mt-6 min-h-11 flex-row items-center gap-2 rounded-xl border border-hairline bg-raised px-4 py-3 active:bg-raised-hover">
+              <Settings size={16} color="#fcfcfc" /><Text className="text-[14px] text-ink">Settings</Text>
             </Pressable>
           </ScrollView>
         ) : <>
@@ -314,26 +323,20 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
               }}
               // On web, on-drag also dismisses focus for programmatic auto-scroll.
               keyboardDismissMode={Platform.OS === "web" ? "none" : Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingTop: 8, paddingBottom: 20, paddingHorizontal: compact ? 12 : 24,
+              contentContainerStyle={{ paddingTop: 8, paddingBottom: 12, paddingHorizontal: compact ? 12 : 24,
                 maxWidth: 900, width: "100%", alignSelf: "center", flexGrow: rows.length === 0 ? 1 : undefined }}>
-              {visibleStart > 0 || loadedCount ? <View className="mb-3 items-center gap-2">
+              {visibleStart > 0 || historyNotice ? <View className="mb-3 items-center gap-2">
                 {visibleStart > 0 ? <Pressable onPress={loadEarlier} accessibilityRole="button" accessibilityLabel="Load earlier messages"
-                  className="min-h-11 justify-center px-4 py-2">
-                  <Text className="text-[13px] text-ink-secondary">Earlier</Text>
+                  className="min-h-11 justify-center rounded-xl border border-hairline bg-panel px-4 py-3 active:bg-raised">
+                  <Text className="text-[13px] text-ink">Earlier messages</Text>
                 </Pressable> : null}
                 <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
-                  {loadedCount > 0
-                    ? visibleStart > 0
-                      ? `${loadedCount} earlier messages loaded. ${visibleStart} more available.`
-                      : `${loadedCount} earlier messages loaded. All available history is shown.`
-                    : visibleStart > 0 ? `${visibleStart} earlier messages available` : ""}
+                  {historyNotice}
                 </Text>
               </View> : null}
               {rows.length === 0 && !activeTool ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"} /> : null}
               {rows.map((row) => row.kind === "day" ? (
-                <View key={row.key} className="my-3 items-center">
-                  <Text className="text-[11px] text-ink-secondary">{row.label}</Text>
-                </View>
+                <Text key={row.key} className="my-4 text-center text-[13px] text-ink-secondary">{row.label}</Text>
               ) : <View key={`message_${row.message.id}`} testID={`transcript-row-${row.message.id}`}
                 onLayout={row.message.interaction ? (event) => {
                   requestPositions.current.set(row.message.id, event.nativeEvent.layout.y);
@@ -344,7 +347,7 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
                 retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
                 onRetry={(id) => void retryMessage(id)} onFocusLost={focusTranscript} />
               </View>)}
-              {activeTool ? <ActivityChip tool={activeTool} reducedMotion={reducedMotion} /> : null}
+              {activeTool ? <ActivityChip tool={activeTool} reducedMotion={reducedMotion} agent={agent} /> : null}
             </ScrollView>
             {!pinned ? <Pressable ref={setJumpRef} onPress={() => {
               pinToLatest(true);
@@ -377,7 +380,13 @@ function buildRows(messages: ChatMessage[]): Row[] {
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     const day = new Date(message.createdAt).toDateString();
-    if (day !== lastDay) { rows.push({ kind: "day", key: `day_${message.id}`, label: formatDay(message.createdAt) }); lastDay = day; }
+    const previous = messages[index - 1];
+    // Grok Bot shows one quiet "Today 22:57" marker per day or after a pause,
+    // instead of a timestamp under every bubble.
+    if (day !== lastDay || (previous && message.createdAt - previous.createdAt >= SEPARATOR_GAP)) {
+      rows.push({ kind: "day", key: `day_${message.id}`, label: `${formatDay(message.createdAt)} ${formatTime(message.createdAt)}` });
+      lastDay = day;
+    }
     const next = messages[index + 1];
     const grouped = !!next && next.kind === "text" && message.kind === "text" && next.role === message.role &&
       new Date(next.createdAt).toDateString() === day && next.createdAt - message.createdAt < 60_000;
@@ -391,8 +400,8 @@ function EmptyThread({ name, color, offline }: {
 }) {
   return (
     <View className="flex-1 items-center justify-center px-4 py-12">
-      <BlobAvatar color={color} name={name} size={56} />
-      <Text className="mt-4 w-full text-center text-[18px] font-semibold text-ink" numberOfLines={2}>{name}</Text>
+      <BlobAvatar color={color} name={name} size={64} />
+      <Text className="mt-5 w-full text-center text-[20px] font-semibold text-ink" numberOfLines={2}>{name}</Text>
       {offline ? <Text className="mt-2 text-[13px] text-ink-secondary">Offline</Text> : null}
     </View>
   );
