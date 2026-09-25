@@ -22,7 +22,7 @@ export async function loadProfiles(): Promise<InstanceProfile[]> {
   const raw = await AsyncStorage.getItem(PROFILES_KEY);
   const value: unknown = raw ? JSON.parse(raw) : [];
   return Array.isArray(value) ? value.filter((row): row is InstanceProfile => row && typeof row.id === "string" &&
-    /^[a-zA-Z0-9._-]+$/.test(row.id) && typeof row.baseUrl === "string" && typeof row.label === "string" && Array.isArray(row.bindingIds)) : [];
+    /^[a-zA-Z0-9._-]+$/.test(row.id) && typeof row.baseUrl === "string" && typeof row.label === "string") : [];
 }
 export async function saveProfile(profile: InstanceProfile, credentials: Credentials): Promise<void> {
   await writeCredentials(profile.id, credentials);
@@ -61,7 +61,7 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
     settings.profileId ??= `manual-${Date.now().toString(36)}`;
     const existing = await readCredentials(settings.profileId);
     const profile = (await loadProfiles()).find((item) => item.id === settings.profileId);
-    await saveProfile(profile ?? { id: settings.profileId, baseUrl: settings.zakuraBaseUrl, label: settings.zakuraBaseUrl, bindingIds: [] },
+    await saveProfile(profile ?? { id: settings.profileId, baseUrl: settings.zakuraBaseUrl, label: settings.zakuraBaseUrl },
       existing?.accessToken === settings.authToken ? existing : { accessToken: settings.authToken });
   }
   const { authToken: _secret, ...preferences } = settings;

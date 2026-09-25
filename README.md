@@ -1,6 +1,6 @@
 # Zakura Bot
 
-A cross-platform Zakura client for iOS, Android and web. Connect your own instance, authorize bots in your tenant, and talk to them through Zakura’s `zakurabot` channel and `chat_reply` tools.
+A cross-platform Zakura client for iOS, Android and web. Sign in with your Zakura account and talk to every agent you can reach through Zakura’s `zakurabot` channel and `chat_reply` tools.
 
 ## Status
 
@@ -8,34 +8,32 @@ UI mirrors Grok Bot minimalism (tools as tiny pills only).
 
 | Product capability | Progress |
 | --- | --- |
-| Zakura login | **Implemented**: browser device authorization, tenant binding consent, rotating refresh credentials, native SecureStore, logout and multiple instances |
-| Bot / Agent management | **Implemented**: authorized roster, binding/profile details, selection, start/stop and fresh sessions |
+| Zakura login | **Implemented**: standard OAuth 2.1 (authorization code + PKCE) with the account's own permissions, rotating refresh tokens, native SecureStore, logout and multiple instances |
+| Bot / Agent management | **Implemented**: the full tenant roster (new agents appear automatically), selection, start/stop and fresh sessions |
+| Agent management in-app | **Implemented**: admins create, edit and delete agents from the app through Zakura's standard agent API |
 | Sidebar groups | **Implemented**: create, rename, sort, assign bots and persist per instance on this device |
 | Send files | **Implemented**: photo/file picker, paste/drop on web, uploads with retry, attachment-only sends, image previews and authenticated downloads |
 | View desktop | **Implemented**: conversation desktop page, authenticated screenshots, refresh, automatic updates and capture recovery |
 | Special messages | Tiny activity pills while running; compact approval/question cards, errors, notices and quotes |
 
-The matching server changes are in [Zakura PR #15](https://github.com/Moonrend/Zakura/pull/15), branch `feat/zakurabot-channel`. Both repositories must be deployed for browser authorization. Production model/device use and native installation have not been verified against a deployed instance.
+The matching server implementation lives in the reCloud/Zakura repository (see `docs/zakurabot-channel.md` there). Deploy a server with the OAuth user channel enabled.
 
 ## Connect to Zakura
 
-1. In Zakura, configure an agent’s model and add an enabled **Zakura Bot** platform binding.
-2. Launch the app, enter the instance URL, and choose **Sign in with Zakura**.
-3. Your browser opens Zakura. Complete the existing tenant login (including MFA/SSO if configured), confirm the displayed device code, and select up to 16 bot bindings.
-4. Return to the app. It completes login automatically and shows the authorized bots.
-5. **Settings → Add instance** adds another login; select a saved instance to switch. **Sign out** revokes the current live device and removes its credentials.
+1. Launch the app, enter the instance URL, and choose **Sign in with Zakura**.
+2. Your browser opens Zakura's standard OAuth consent. Complete the existing tenant login (including MFA/SSO if configured) and approve the request.
+3. Return to the app. It completes login automatically and shows every agent in your tenant — no per-agent setup, bindings or device tokens. New agents appear on their own.
+4. **Settings → Add instance** adds another login; select a saved instance to switch. **Sign out** revokes the OAuth refresh token and removes its credentials.
 
-Access credentials refresh every 30 minutes without changing the device or its history. Refresh credentials expire after 90 days. Native credentials live in SecureStore; web credentials live in the current tab’s sessionStorage, so closing the tab requires a new login. Ordinary preferences contain only instance metadata. Older plaintext settings are migrated and erased on load.
+Access tokens refresh automatically (1-hour tokens, 30-day rotating refresh tokens). Native credentials live in SecureStore; web credentials live in the current tab’s sessionStorage, so closing the tab requires a new login. Ordinary preferences contain only instance metadata.
 
-**Advanced connection** retains manual device tokens for existing installations. **Try demo** opens local mock conversations without an account. The URL must be reachable from the phone/browser; use HTTPS for a public instance and retain any reverse-proxy path prefix.
+**Advanced connection** retains manual tokens — paste an OAuth access token from any Zakura session. **Try demo** opens local mock conversations without an account. The URL must be reachable from the phone/browser; use HTTPS for a public instance and retain any reverse-proxy path prefix.
 
-Open **Manage bots** in the sidebar or **Bot details** in a conversation. Select an authorized bot, start its session, stop a running turn, or choose **New session** for fresh model context. The transcript keeps earlier messages. Bots and platform bindings are created in Zakura; **Authorize bots** opens another device authorization to choose bindings.
+Open **Manage bots** in the sidebar or **Bot details** in a conversation. Select a bot, start its session, stop a running turn, or choose **New session** for fresh model context. The transcript keeps earlier messages. Administrators see **New agent**, **Edit agent** (name, description, computer, memory) and **Delete agent** on the same screen, backed by Zakura's standard `/api/agents`; the roster refreshes on its own after each change. Members see and use every agent their account can reach.
 
 Open **Groups** in the sidebar to create or rename sections, move them up/down, and place bots in a section. Deleting a section returns its bots to Ungrouped. Group layouts persist locally for each saved instance; cloud synchronization is not implemented.
 
-In a connected bot conversation, tap **+ → Photos / Files**, or paste/drop files on web. The bot must have filesystem access enabled in Zakura. Upload up to 8 nonempty files, each at most 16 MiB; wait for **Ready to send**, optionally add text, then Send. Uploads stay with their bot when switching conversations and can be retried or removed. Tap an attachment to preview supported images or **Download** (the native share/save sheet on iOS and Android). Device credentials stay in request headers, including downloads. Unsent file drafts are held in memory and clear on reload or instance switch.
-
-Login supports the server's S256 proof key and separate API/browser authorization hosts. Deploy the matching server branch for uploads and the extended device APIs.
+In a connected bot conversation, tap **+ → Photos / Files**, or paste/drop files on web. The bot must have filesystem access enabled in Zakura. Upload up to 8 nonempty files, each at most 16 MiB; wait for **Ready to send**, optionally add text, then Send. Uploads stay with their bot when switching conversations and can be retried or removed. Tap an attachment to preview supported images or **Download** (the native share/save sheet on iOS and Android). Credentials stay in request headers, including downloads. Unsent file drafts are held in memory and clear on reload or instance switch.
 
 Tap the **monitor icon** in a conversation to open the bot's desktop. Enable **Computer** on the agent in Zakura first. **Refresh** captures the latest screen; **Auto-refresh** follows it while the page is visible. Failed refreshes retain the last successful capture, and Done returns to the chat draft. This release provides viewing; mouse/keyboard control and VNC are not implemented in the app.
 
@@ -92,7 +90,7 @@ npm run test:web
 ZAKURA_SERVER_PATH=../Zakura npm run test:integration
 ```
 
-Browser checks cover product workflows and chat delivery, including device login, instance switching, logout and reconnection. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
+Browser checks cover product workflows and chat delivery, including OAuth login, instance switching, logout and reconnection. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chromium installation.
 
 The cross-repository integration check starts Zakura's HTTP/WebSocket server with PGlite and a controlled runtime, then drives it with this app's live client. It verifies file delivery to the agent workspace, authenticated downloads and retry deduplication without external model credentials.
 
@@ -143,9 +141,10 @@ Profiles in `eas.json`:
 ## Project layout
 
 ```text
-app/                 Expo Router screens
+app/                 Expo Router screens (incl. the web OAuth callback)
 components/          Login, sidebar, chat and composer
-lib/auth.ts          Device authorization and credential refresh
+lib/auth.ts          OAuth 2.1 (PKCE) token exchange and refresh
+lib/agents.ts        Standard /api/agents management client
 lib/settings.ts      SecureStore / sessionStorage and instance metadata
 lib/channel/         Live WebSocket and mock transports
 lib/chat-state.ts    Chat reducer
@@ -155,10 +154,10 @@ tests/               Unit and browser workflow tests
 
 ## Zakura integration
 
-See [docs/architecture.md](./docs/architecture.md) and [the server channel guide](https://github.com/Moonrend/Zakura/blob/feat/zakurabot-channel/docs/zakurabot-channel.md). Credentials are scoped to a tenant, device and explicit `bindingIds`; a device cannot call tenant management APIs. Authorization uses one-time device grants and rotating refresh tokens stored as hashes on the server. A browser approves the selected bindings using the normal tenant session.
+See [docs/architecture.md](./docs/architecture.md) and the server’s `docs/zakurabot-channel.md`. The app signs in with Zakura's standard OAuth 2.1 authorization-code flow (PKCE, dynamically registered public client, `api` scope) and then acts as the signed-in user: every tenant agent is reachable, and agent management uses the standard `/api/agents` endpoints with the account's own permissions. Chat runs over the `zakurabot` WS channel with the access token in the hello frame; credentials never travel in socket URLs.
 
-WS reconnects restore the latest 100 delivered messages per authorized conversation. Message retries retain their idempotency key. Switching instances clears the current roster, drafts and transcript before the other instance connects. Credentials never travel in socket URLs.
+WS reconnects restore the latest 100 delivered messages per conversation. Message retries retain their idempotency key. Switching instances clears the current roster, drafts and transcript before the other instance connects.
 
 ## 产品进度（中文）
 
-当前主线：Zakura 授权登录 → Bot 管理 → 分组 → 发文件 → 看桌面 → 特殊消息。顶部 Status 表随每次产品里程碑更新。App 首次启动使用浏览器设备授权；手动粘贴 token 仅作为高级 fallback。服务端功能跟随上面的 PR 部署。
+当前主线：OAuth 登录（用户自身权限，免预配）→ 全量 Agent 使用 → 管理员在 App 内创建/编辑/删除 Agent → 分组 → 发文件 → 看桌面 → 特殊消息。顶部 Status 表随每次产品里程碑更新。登录走 Zakura 标准 OAuth（授权码 + PKCE，浏览器完成 MFA/SSO）；手动粘贴 token 仅作为高级 fallback。服务端功能跟随配套平台（reCloud/Zakura）的 `zakurabot-channel` 文档部署。

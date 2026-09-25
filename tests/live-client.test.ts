@@ -514,7 +514,9 @@ test("socket URLs preserve prefixes and reject credentials or unsupported protoc
   }
   assert.equal(validateLiveSettings({ baseUrl: "http://localhost", token: "x" }), null);
   assert.ok(validateLiveSettings({ baseUrl: "http://localhost", token: " " }));
-  assert.ok(validateLiveSettings({ baseUrl: "http://localhost", token: "x".repeat(257) }));
+  assert.equal(validateLiveSettings({ baseUrl: "http://localhost", token: "x".repeat(4096) }), null,
+    "OAuth access tokens are far longer than the old device tokens");
+  assert.ok(validateLiveSettings({ baseUrl: "http://localhost", token: "x".repeat(4097) }));
 });
 
 test("user receipts respect the same nonempty text limit as inbound messages", () => {

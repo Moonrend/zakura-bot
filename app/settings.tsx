@@ -121,7 +121,7 @@ export default function SettingsScreen() {
           <Text className="text-[17px] text-ink">Token</Text>
           <TextInput value={token} onChangeText={(value) => { edit(); setToken(value); }}
             editable={settingsReady && !saving} autoCapitalize="none" autoCorrect={false} autoComplete="off" secureTextEntry
-            accessibilityLabel="Auth token" placeholder="Device token" placeholderTextColor="#8a8a8a" className={input} />
+            accessibilityLabel="Auth token" placeholder="OAuth access token" placeholderTextColor="#8a8a8a" className={input} />
         </Row>
       </Card>
 

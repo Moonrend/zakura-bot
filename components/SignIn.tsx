@@ -3,65 +3,65 @@ import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, Vi
 import * as WebBrowser from "expo-web-browser";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { instanceUrl, pollAuthorization, startAuthorization, ZakuraApiError, type DeviceAuthorization } from "@/lib/auth";
+import { codeFromRedirect, exchangeOAuthCode, instanceUrl, startOAuthLogin } from "@/lib/auth";
+import { ensureOAuthClient, oauthRedirectUri, savePendingLogin, takePendingLogin } from "@/lib/oauth-web";
 import { useStore } from "@/lib/store";
 
 export function SignIn() {
-  const { settings, updateSettings, finishSignIn, profiles, switchInstance, authNotice } = useStore();
+  const { settings, completeSignIn, switchInstance, profiles, authNotice, updateSettings } = useStore();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [url, setUrl] = useState(settings.zakuraBaseUrl);
-  const [name, setName] = useState(`Zakura Bot · ${Platform.OS}`);
-  const [grant, setGrant] = useState<{ data: DeviceAuthorization; baseUrl: string; expiresAt: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const startRef = useRef<AbortController | null>(null);
+  const startRef = useRef<{ baseUrl: string; verifier: string; state: string } | null>(null);
 
-  useEffect(() => () => { startRef.current?.abort(); }, []);
+  async function settle(baseUrl: string, verifier: string, code: string, state: string, clientId: string, redirectUri: string) {
+    if (startRef.current?.state && state && startRef.current.state !== state) throw new Error("Zakura returned a mismatched login state.");
+    const tokens = await exchangeOAuthCode(baseUrl, { code, verifier, clientId, redirectUri });
+    await completeSignIn(baseUrl, clientId, tokens);
+    if (!Platform.OS || Platform.OS !== "web" || !window.opener) router.dismissTo("/");
+  }
+
+  // Web 弹窗回调：/oauth/callback 页面把授权码发回本页。
   useEffect(() => {
-    if (!grant) return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
-    let delay = grant.data.interval * 1000;
-    const poll = async () => {
-      if (Date.now() >= grant.expiresAt) { setGrant(null); setError("This authorization code expired. Start a new login."); return; }
-      try {
-        const tokens = await pollAuthorization(grant.baseUrl, grant.data.device_code, grant.data.code_verifier, controller.signal);
-        if (controller.signal.aborted) return;
-        await finishSignIn(grant.baseUrl, tokens);
-        if (!controller.signal.aborted) { setGrant(null); router.dismissTo("/"); }
-        return;
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        if (cause instanceof ZakuraApiError) {
-          if (cause.code === "slow_down") delay += 5000;
-          else if (cause.code !== "authorization_pending") {
-            setGrant(null); setError(cause.code === "access_denied" ? "Authorization was declined. You can start again." : cause.message); return;
-          }
-        } else setError("Waiting for Zakura. Check your connection; this login will retry automatically.");
-      }
-      timer = setTimeout(() => void poll(), delay);
+    if (Platform.OS !== "web") return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { source?: string; code?: string; state?: string } | null;
+      if (event.origin !== window.location.origin || data?.source !== "zakura-bot-oauth" || !data.code) return;
+      const pending = takePendingLogin();
+      if (!pending || !startRef.current) return;
+      setBusy(true); setError(null);
+      settle(pending.baseUrl, startRef.current.verifier, data.code, data.state ?? startRef.current.state,
+        pending.clientId, pending.redirectUri)
+        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not complete the Zakura login."))
+        .finally(() => setBusy(false));
     };
-    timer = setTimeout(() => void poll(), delay);
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [grant, finishSignIn, router]);
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function begin() {
     if (busy) return;
-    let popup: Window | null = null;
     try {
       const baseUrl = instanceUrl(url);
-      if (!name.trim()) throw new Error("Give this device a name.");
-      if (Platform.OS === "web") { popup = window.open("about:blank", "_blank"); if (popup) popup.opener = null; }
-      setBusy(true); setError(null); setGrant(null);
-      const controller = new AbortController(); startRef.current = controller;
-      const data = await startAuthorization(baseUrl, name.trim(), controller.signal);
-      if (controller.signal.aborted) { popup?.close(); return; }
-      setGrant({ data, baseUrl, expiresAt: Date.now() + data.expires_in * 1000 });
-      if (popup) popup.location.href = data.verification_uri_complete;
-      else if (Platform.OS !== "web") void WebBrowser.openBrowserAsync(data.verification_uri_complete);
+      setBusy(true); setError(null);
+      const clientId = await ensureOAuthClient(baseUrl);
+      const redirectUri = oauthRedirectUri(baseUrl);
+      const start = await startOAuthLogin(baseUrl, clientId, redirectUri);
+      startRef.current = { baseUrl, verifier: start.verifier, state: start.state };
+      if (Platform.OS === "web") {
+        savePendingLogin({ baseUrl, clientId, verifier: start.verifier, state: start.state, redirectUri });
+        const popup = window.open(start.authorizationUrl, "_blank", "popup");
+        if (!popup) window.location.href = start.authorizationUrl;
+      } else {
+        const result = await WebBrowser.openAuthSessionAsync(start.authorizationUrl, start.redirectUri);
+        if (result.type !== "success") throw new Error("Authorization was cancelled. You can start again.");
+        const code = codeFromRedirect(result.url, start.state);
+        await settle(baseUrl, start.verifier, code, start.state, clientId, start.redirectUri);
+      }
     } catch (cause) {
-      popup?.close();
       setError(cause instanceof Error ? cause.message : "Could not start Zakura login.");
     } finally { setBusy(false); }
   }
@@ -72,35 +72,20 @@ export function SignIn() {
   return <ScrollView className="flex-1 bg-app" keyboardShouldPersistTaps="handled"
     contentContainerStyle={{ padding: 24, paddingTop: Math.max(insets.top, 48), paddingBottom: Math.max(insets.bottom, 24), maxWidth: 560, width: "100%", alignSelf: "center" }}>
     <View className="mb-8 items-center"><View className="h-16 w-16 rounded-full bg-ink" /></View>
-    <Text className="mb-6 text-center text-[24px] font-medium text-ink" accessibilityRole="header">Connect to Zakura</Text>
+    <Text className="mb-2 text-center text-[24px] font-medium text-ink" accessibilityRole="header">Connect to Zakura</Text>
+    <Text className="mb-6 text-center text-[13px] leading-5 text-ink-secondary">Sign in with your Zakura account. Zakura Bot uses your own permissions: every agent you can reach, with no extra setup.</Text>
     <View className="mb-5 overflow-hidden rounded-3xl bg-panel">
       <View className="mx-4 min-h-14 flex-row items-center gap-4 py-2">
         <Text className="text-[16px] text-ink">Instance</Text>
-        <TextInput value={url} onChangeText={setUrl} editable={!busy && !grant} accessibilityLabel="Zakura instance URL"
+        <TextInput value={url} onChangeText={setUrl} editable={!busy} accessibilityLabel="Zakura instance URL"
           autoCapitalize="none" autoCorrect={false} keyboardType="url" placeholder="https://zakura.example.com" placeholderTextColor="#8a8a8a"
           className="min-h-11 min-w-0 flex-1 text-right text-[16px] text-ink" />
       </View>
-      <View className="mx-4 min-h-14 flex-row items-center gap-4 border-t border-hairline py-2">
-        <Text className="text-[16px] text-ink">Device</Text>
-        <TextInput value={name} onChangeText={setName} editable={!busy && !grant} maxLength={128} accessibilityLabel="Device name"
-          className="min-h-11 min-w-0 flex-1 text-right text-[16px] text-ink" />
-      </View>
     </View>
-    {grant ? <View className="mb-5 gap-3 rounded-3xl bg-panel p-5">
-      <Text className="text-[14px] text-ink-secondary">Confirm this code in Zakura</Text>
-      <Text selectable className="text-[28px] font-semibold text-ink">{grant.data.user_code}</Text>
-      <Text accessibilityLiveRegion="polite" className="text-[14px] text-ink-secondary">Waiting for authorization…</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Open Zakura authorization" className="min-h-11 justify-center rounded-full bg-ink px-4"
-        onPress={() => { void WebBrowser.openBrowserAsync(grant.data.verification_uri_complete); }}>
-        <Text className="text-center font-semibold text-app">Open Zakura authorization</Text>
-      </Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel="Cancel login" className="min-h-11 justify-center" onPress={() => { setGrant(null); setError(null); }}>
-        <Text className="text-center text-ink-secondary">Cancel login</Text>
-      </Pressable>
-    </View> : <Pressable onPress={() => void begin()} disabled={busy} accessibilityRole="button" accessibilityLabel="Sign in with Zakura"
+    <Pressable onPress={() => void begin()} disabled={busy} accessibilityRole="button" accessibilityLabel="Sign in with Zakura"
       className="min-h-12 flex-row items-center justify-center gap-2 rounded-full bg-ink px-4 py-3">
       {busy ? <ActivityIndicator color="#070707" /> : null}<Text className="font-semibold text-app">{busy ? "Connecting…" : "Sign in with Zakura"}</Text>
-    </Pressable>}
+    </Pressable>
     {error || authNotice ? <Text accessibilityRole="alert" className="my-4 text-[14px] leading-6 text-danger">{error ?? authNotice}</Text> : null}
     {profiles.length ? <View className="mt-6 overflow-hidden rounded-3xl bg-panel">
       {profiles.map((profile, index) => <Pressable key={profile.id} onPress={() => void choose(profile.id)} accessibilityRole="button"

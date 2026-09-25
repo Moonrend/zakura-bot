@@ -8,8 +8,9 @@ import { DEMO_AGENTS } from "./channel/mock-client";
 import { MAX_MESSAGE_LENGTH } from "./channel/types";
 import { chatReducer, emptyChatState, isAgentWorking, previewFromMessages, type ChatAction, type ChannelError } from "./chat-state";
 import { loadSettings, saveSettings, loadProfiles, saveProfile, readCredentials, writeCredentials, removeProfile } from "./settings";
-import { CredentialSession, credentialsFromToken, instanceUrl, refreshAuthorization, revokeAuthorization, zakuraRequest, zakuraBinaryRequest,
-  type InstanceProfile, type TokenResponse, type ZakuraBinary } from "./auth";
+import { CredentialSession, instanceUrl, refreshOAuthToken, revokeOAuthToken, zakuraRequest, zakuraBinaryRequest,
+  tokensFromOAuth, type InstanceProfile, type OAuthTokens, type ZakuraBinary } from "./auth";
+import { agentPath, agentsPath, mePath, parseAccountInfo, parseAgentDetail, type AgentDraft, type ManagedAgent } from "./agents";
 import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type BotSession, type InteractionAnswer, type MessageAttachment } from "./types";
 import { emptyGroups, reduceGroups, type BotGroups, type GroupAction } from "./groups";
 import { loadGroups, saveGroups } from "./group-storage";
@@ -31,7 +32,7 @@ type StoreValue = {
   settingsReady: boolean;
   profiles: InstanceProfile[];
   authNotice: string | null;
-  finishSignIn: (baseUrl: string, tokens: TokenResponse) => Promise<void>;
+  completeSignIn: (baseUrl: string, clientId: string, tokens: OAuthTokens) => Promise<void>;
   switchInstance: (id: string) => Promise<void>;
   signOut: () => Promise<void>;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -42,6 +43,11 @@ type StoreValue = {
   retryAttachment: (agentId: string, id: string) => void;
   sessions: Record<string, BotSession>;
   sessionAction: (agentId: string, action: "status" | "start" | "stop" | "new") => Promise<BotSession>;
+  /** True on a trusted instance: every agent is available and manageable. */
+  canManage: boolean;
+  createAgent: (draft: AgentDraft) => Promise<ManagedAgent>;
+  updateAgent: (agentId: string, draft: AgentDraft) => Promise<ManagedAgent>;
+  deleteAgent: (agentId: string) => Promise<void>;
   groups: BotGroups;
   groupsReady: boolean;
   updateGroups: (action: GroupAction) => Promise<void>;
@@ -106,6 +112,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [profiles, setProfiles] = useState<InstanceProfile[]>([]);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Record<string, BotSession>>({});
+  const [canManage, setCanManage] = useState(false);
   const [groups, setGroups] = useState<BotGroups>(emptyGroups);
   const [groupsReady, setGroupsReady] = useState(false);
   const groupsRef = useRef(groups);
@@ -153,22 +160,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         preview: previewFromMessages(messages[agent.id] ?? []) ?? agent.preview })) : [];
       dispatch({ type: "reset", agents, messages });
       setSessions({});
+      setCanManage(false);
       scopeRef.current = scope;
     }
     let session: Promise<CredentialSession> | undefined;
     const getToken = async () => {
       if (!nextSettings.profileId) return nextSettings.authToken;
       const profileId = nextSettings.profileId;
-      session ??= readCredentials(profileId).then((credentials) => {
+      session ??= (async () => {
+        const [credentials, profiles] = await Promise.all([readCredentials(profileId), loadProfiles()]);
         if (!credentials) throw new Error("Sign in to this Zakura instance again.");
-        return new CredentialSession(credentials, (token) => refreshAuthorization(nextSettings.zakuraBaseUrl, token), async (next) => {
+        const clientId = profiles.find((profile) => profile.id === profileId)?.clientId ?? "";
+        return new CredentialSession(credentials, (token) => refreshOAuthToken(nextSettings.zakuraBaseUrl, token, clientId), async (next) => {
           await writeCredentials(profileId, next);
           if (settingsRef.current.profileId === profileId) {
             settingsRef.current = { ...settingsRef.current, authToken: next.accessToken };
             setSettings(settingsRef.current);
           }
         });
-      });
+      })();
       return (await session).getToken();
     };
     tokenProviderRef.current = getToken;
@@ -188,6 +198,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (clientRef.current === client) dispatch({ type: "connection", state: "error",
         detail: error instanceof Error ? error.message : "Could not connect to the channel." });
     });
+    // Management access follows the signed-in account's own role: ask once per connection.
+    if (!nextSettings.useMockChannel) {
+      const scope = channelScope(nextSettings);
+      void (async () => {
+        const token = await getToken();
+        const me = parseAccountInfo(await zakuraRequest(nextSettings.zakuraBaseUrl, mePath(),
+          { headers: { Authorization: `Bearer ${token}` } }));
+        if (channelScope(settingsRef.current) === scope) setCanManage(me.canManage);
+      })().catch(() => undefined);
+    }
   }, [dispatch]);
 
   useEffect(() => {
@@ -423,12 +443,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return pending;
   }, []);
 
-  const finishSignIn = useCallback(async (baseUrl: string, tokens: TokenResponse) => {
-    const credentials = credentialsFromToken(tokens);
-    const profile: InstanceProfile = { id: uid("instance"), baseUrl: instanceUrl(baseUrl),
-      label: tokens.tenant.name, tenantName: tokens.tenant.name, deviceId: tokens.device.id, bindingIds: tokens.device.bindingIds };
+  const completeSignIn = useCallback(async (baseUrl: string, clientId: string, tokens: OAuthTokens) => {
+    const credentials = tokensFromOAuth(tokens);
+    const base = instanceUrl(baseUrl);
+    const profile: InstanceProfile = { id: uid("instance"), baseUrl: base,
+      label: new URL(base).hostname, clientId };
     await saveProfile(profile, credentials);
-    await updateSettings({ zakuraBaseUrl: profile.baseUrl, authToken: credentials.accessToken, profileId: profile.id,
+    await updateSettings({ zakuraBaseUrl: base, authToken: credentials.accessToken, profileId: profile.id,
       useMockChannel: false, onboardingComplete: true });
   }, [updateSettings]);
 
@@ -448,8 +469,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     await tokenProviderRef.current?.().catch(() => undefined);
     const credentials = current.profileId ? await readCredentials(current.profileId) : null;
     if (!current.useMockChannel && (credentials || current.authToken)) {
-      try { await revokeAuthorization(current.zakuraBaseUrl, credentials?.refreshToken ?? credentials?.accessToken ?? current.authToken); }
-      catch { notice = "Signed out on this device. Zakura was unreachable; revoke the device in Zakura to end its server access."; }
+      try { await revokeOAuthToken(current.zakuraBaseUrl, credentials?.refreshToken ?? credentials?.accessToken ?? current.authToken); }
+      catch { notice = "Signed out on this device. Zakura was unreachable; revoke the session on the server to end its access."; }
     }
     if (current.profileId) await removeProfile(current.profileId);
     await updateSettings({ authToken: "", profileId: "", useMockChannel: true, onboardingComplete: false });
@@ -478,19 +499,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return session;
   }, [request, dispatch]);
 
+  // Management goes through Zakura's standard agent API with the account's own
+  // permissions; the server pushes a fresh roster frame after each change.
+  const createAgent = useCallback(async (draft: AgentDraft) => {
+    const result = await request<unknown>(agentsPath(), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+    return parseAgentDetail(result);
+  }, [request]);
+  const updateAgent = useCallback(async (agentId: string, draft: AgentDraft) => {
+    const result = await request<unknown>(agentPath(agentId), {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+    return parseAgentDetail(result);
+  }, [request]);
+  const deleteAgent = useCallback(async (agentId: string) => {
+    await request(agentPath(agentId), { method: "DELETE" });
+  }, [request]);
+
   const value = useMemo<StoreValue>(() => ({
     agents: state.agents, selectedId: state.selectedId, messagesByAgent: state.messagesByAgent,
     draftsByAgent: state.draftsByAgent,
     typing: Object.fromEntries(state.agents.map((agent) => [agent.id, isAgentWorking(state, agent.id)])),
     interrupting: state.interrupting, connection: state.connection,
     connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
-    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    profiles, authNotice, completeSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    canManage, createAgent, updateAgent, deleteAgent,
     requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment,
     sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, respondInteraction, refreshInteraction, interrupt, reconnect,
     dismissError, updateSettings, setSidebarOpen, setThreadVisible,
   }), [state, settings, settingsReady, transportLabel, lastError, sidebarOpen, selectAgent, setDraft,
     clearDraft, send, retryMessage, respondInteraction, refreshInteraction, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
-    profiles, authNotice, finishSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    profiles, authNotice, completeSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    canManage, createAgent, updateAgent, deleteAgent,
     requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

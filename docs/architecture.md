@@ -74,15 +74,17 @@ Aligned with Zakura `POSTABLE_PROPERTIES`:
 
 Related tools the UI may surface as **activity chips**: `chat_start_typing`, `chat_add_reaction`, and other remote-channel tools. Visible bubbles still come from `chat_reply` (or post/DM variants mapped the same way).
 
-## Binding as platform `zakurabot`
+## Channel as platform `zakurabot`
 
 The reference checkout of **Moonrend/Zakura** implements this platform in `zakurabot-gateway.ts`, `zakurabot-channel.ts`, `zakurabot-adapter.ts`, `zakurabot-protocol.ts` and `zakurabot-store.ts`. Deploy a server version containing those services; this client does not install them.
 
-1. In the Zakura dashboard, add an enabled **Zakura Bot** binding to an agent and configure its chat model.
-2. Create a device for the binding; copy its **Base URL + device token** into this app’s Settings and disable the mock channel. General API/admin tokens cannot authenticate the channel.
-3. The server resolves the device to its tenant and authorized bindings. Threads are isolated by tenant/device/binding/agent; the client supplies only an authorized agent id.
-4. Composer `send` frames enter `RemoteAgentIngress`. The runtime binds a `RemoteChannelSessionHandle` before starting the turn; `chat_reply` defaults to quoting its `inboundMessageId`.
-5. The first-party raw WS gateway shares the API server with Socket.IO. Existing Slack/Telegram/etc. platforms retain their Chat SDK adapters.
+1. The app registers a public OAuth client per instance (`POST /oauth/register`, PKCE, `api` scope) and runs Zakura's standard authorization-code flow in the browser — the tenant login (including MFA/SSO) happens entirely on the server's UI.
+2. The authorization code is exchanged at `POST /token` for a JWT access token (1 h) and a rotating refresh token (30 d), stored per instance in SecureStore / sessionStorage.
+3. Every request — REST (`/api/agents`, files, desktop, interactions), the WS hello frame, and session management — carries that access token. The server maps it to the signed-in user; **permissions are the user's own**: every tenant agent is reachable, new agents appear automatically, and each agent gets an internal `zakurabot` binding provisioned on first access (threads are isolated by tenant/user/binding/agent).
+4. Agent management uses Zakura's standard `/api/agents` CRUD (implemented in `lib/agents.ts`, surfaced in `app/bots.tsx`); the server enforces the account's role, and management controls appear only when `GET /api/me` reports an admin/owner role.
+5. Composer `send` frames enter `RemoteAgentIngress` as before. The first-party raw WS gateway shares the API server with Socket.IO; existing Slack/Telegram/etc. platforms retain their Chat SDK adapters.
+
+Revocation is the standard `POST /token/revoke` on logout. Suspended members or tenants lose channel access immediately (the server re-checks membership per operation).
 
 See [Zakura’s channel setup and deployment guide](https://github.com/Moonrend/Zakura/blob/main/docs/zakurabot-channel.md). The mock remains the default for local demos.
 

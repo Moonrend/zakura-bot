@@ -92,7 +92,7 @@ export function validateLiveSettings(input: { baseUrl: string; token: string }):
       : (error as Error).message;
   }
   if (!input.token.trim()) return "Auth token is required for the live channel.";
-  if (input.token.trim().length > 256) return "Auth token must be at most 256 characters. Use a Zakura Bot device token.";
+  if (input.token.trim().length > 4096) return "Auth token is too long. Paste the full Zakura access token.";
   return null;
 }
 
