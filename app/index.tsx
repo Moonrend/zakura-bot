@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Platform, View, useWindowDimensions, Pressable } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { AgentSidebar } from "@/components/AgentSidebar";
+import { AgentInfoPane } from "@/components/AgentInfoPane";
 import { ChatPane } from "@/components/ChatPane";
+import { CommandPalette } from "@/components/CommandPalette";
 import { SignIn } from "@/components/SignIn";
 import { useStore } from "@/lib/store";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
@@ -11,7 +13,10 @@ import { useScreenFocus } from "@/lib/use-screen-focus";
 export default function HomeScreen() {
   const { width, height } = useWindowDimensions();
   const compact = width < 768;
-  const { sidebarOpen, setSidebarOpen, settingsReady, settings, setThreadVisible } = useStore();
+  const { sidebarOpen, setSidebarOpen, settingsReady, settings, setThreadVisible, agents, selectedId } = useStore();
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const infoAgent = agents.find((item) => item.id === selectedId);
   // The desktop sidebar and modal have different lifetimes. Keep the user's
   // filters with the screen so resizing or reopening the drawer retains them.
   const [query, setQuery] = useState("");
@@ -35,6 +40,13 @@ export default function HomeScreen() {
   const setDesktopRemovalRef = useFocusOnRemoval(restoreSidebarFocus);
   const setDrawerRemovalRef = useFocusOnRemoval(restoreSidebarFocus);
   const setMenuRemovalRef = useFocusOnRemoval(restoreSidebarFocus);
+  // The home screen stays mounted when a route is pushed on top; only open the
+  // palette from the focused chat screen.
+  const paletteFocusedRef = useRef(false);
+  useFocusEffect(useCallback(() => {
+    paletteFocusedRef.current = true;
+    return () => { paletteFocusedRef.current = false; };
+  }, []));
   const setDesktopSidebarRef = useCallback((node: View | null) => {
     setDesktopRemovalRef(node);
     desktopSidebarRef.current = node;
@@ -49,6 +61,25 @@ export default function HomeScreen() {
     // when rotating or resizing back to a compact layout.
     if (!compact) setSidebarOpen(false);
   }, [compact, setSidebarOpen]);
+
+  useEffect(() => {
+    // The info pane is a desktop overlay; compact screens use the agent-info route.
+    if (compact) { setInfoOpen(false); setPaletteOpen(false); }
+  }, [compact]);
+
+  useEffect(() => {
+    // The command palette is desktop-web only.
+    if (Platform.OS !== "web" || compact) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!paletteFocusedRef.current) return;
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && (event.key === "k" || event.key === "K")) {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [compact]);
 
   useFocusEffect(useCallback(() => {
     setThreadVisible(!compact || !sidebarOpen);
@@ -71,8 +102,18 @@ export default function HomeScreen() {
       ) : null}
       <View className="min-w-0 flex-1" accessibilityElementsHidden={compact && sidebarOpen}
         importantForAccessibility={compact && sidebarOpen ? "no-hide-descendants" : "auto"}>
-        <ChatPane agentListButtonRef={setAgentListButtonRef} />
+        <ChatPane agentListButtonRef={setAgentListButtonRef} onOpenInfo={() => setInfoOpen(true)} />
       </View>
+      {!compact && infoOpen && infoAgent ? <>
+        <Pressable className="absolute inset-0 bg-black/40" onPress={() => setInfoOpen(false)}
+          accessible={false} focusable={false} />
+        <View className="absolute inset-y-0 right-0 w-80 max-w-full border-l border-hairline bg-app" accessibilityViewIsModal>
+          <AgentInfoPane key={infoAgent.id} agentId={infoAgent.id} onClose={() => setInfoOpen(false)} />
+        </View>
+      </> : null}
+      {!compact && Platform.OS === "web" && paletteOpen ? (
+        <CommandPalette onClose={() => setPaletteOpen(false)} />
+      ) : null}
       <Modal transparent visible={compact && sidebarOpen} animationType="none"
         onRequestClose={() => setSidebarOpen(false)} statusBarTranslucent>
         {/* Web modals render outside the app root, so they need the same

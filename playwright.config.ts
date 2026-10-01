@@ -10,12 +10,13 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:4173",
     viewport: { width: 1440, height: 1000 },
+    colorScheme: "dark",
     trace: "retain-on-failure",
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : undefined,
   },
   webServer: {
-    command: "npm run preview:web",
+    command: "pnpm run preview:web",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: !process.env.CI,
     timeout: 15_000,

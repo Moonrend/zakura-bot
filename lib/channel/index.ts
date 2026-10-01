@@ -1,6 +1,7 @@
 export type {
   ChannelConnectionState,
   ChannelEvent,
+  ChannelHistoryPage,
   ChannelListener,
   SendMessageInput,
   ZakuraChannelClient,

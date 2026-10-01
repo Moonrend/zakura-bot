@@ -15,10 +15,11 @@ const TERMINAL_CLOSE_DETAILS = new Map<number, string>([
   [4403, "Channel access denied. Check your binding and token."],
 ]);
 
-/** Protocol/data rejection needs intervention; transport and service failures can retry. */
-export function channelCloseFailure(code: number): { detail: string; retry: boolean } {
+/** Protocol/data rejection needs intervention; transport and service failures can retry. `auth` marks a rejected token (4401). */
+export function channelCloseFailure(code: number): { detail: string; retry: boolean; auth: boolean } {
   const detail = TERMINAL_CLOSE_DETAILS.get(code);
-  return detail ? { detail, retry: false } : { detail: `Connection closed (${code}). Reconnecting…`, retry: true };
+  return detail ? { detail, retry: false, auth: code === 4401 }
+    : { detail: `Connection closed (${code}). Reconnecting…`, retry: true, auth: false };
 }
 
 export class UnsupportedChannelProtocolError extends Error {
@@ -41,6 +42,7 @@ export type ServerFrame =
   | { type: "chat_reply"; message: ChatMessage }
   | Extract<ChannelEvent, { type: "agents" | "message" | "message_delta" | "message_done" | "tool_activity" | "typing" }>
   | (Extract<ChannelEvent, { type: "error" }> & { fatal?: boolean })
+  | { type: "reaction"; messageId: string; emoji: string; userId: string; op: "add" | "remove"; at: number }
   | { type: "pong" };
 
 type RecordValue = Record<string, unknown>;
@@ -63,6 +65,9 @@ function optionalString(value: unknown): value is string | undefined {
 }
 function optionalBool(value: unknown): value is boolean | undefined {
   return value === undefined || typeof value === "boolean";
+}
+function optionalBounded(value: unknown, max: number): value is string | undefined {
+  return value === undefined || (typeof value === "string" && value.length <= max);
 }
 function timestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 8.64e15;
@@ -234,18 +239,26 @@ function roster(value: unknown): Agent[] {
     requireValid(item.color === undefined || (typeof item.color === "string" && /^#[\da-f]{6}$/i.test(item.color)));
     requireValid(item.bindingId === undefined || id(item.bindingId));
     requireValid(optionalString(item.description));
+    requireValid(optionalString(item.spaceId) && optionalString(item.spaceName));
+    requireValid(optionalBounded(item.avatarColor, 64) && optionalBounded(item.avatarShape, 32) && optionalBounded(item.avatarUrl, 2048));
     let capabilities: Agent["capabilities"];
     if (item.capabilities !== undefined) {
       requireValid(record(item.capabilities) && typeof item.capabilities.files === "boolean" &&
         typeof item.capabilities.desktop === "boolean" && typeof item.capabilities.interactions === "boolean");
       capabilities = { files: item.capabilities.files, desktop: item.capabilities.desktop, interactions: item.capabilities.interactions };
     }
+    const avatarUrl = normalizeHttpUrl(item.avatarUrl);
     return {
       id: item.id, name: item.name, title: item.title, preview: item.preview,
       status: item.status as Agent["status"], color: (item.color as string | undefined) ?? "#1084fe",
       unread: item.unread ?? false,
       ...(item.bindingId ? { bindingId: item.bindingId } : {}),
       ...(item.description ? { description: item.description } : {}),
+      ...(item.spaceId ? { spaceId: item.spaceId } : {}),
+      ...(item.spaceName ? { spaceName: item.spaceName } : {}),
+      ...(item.avatarColor ? { avatarColor: item.avatarColor as string } : {}),
+      ...(item.avatarShape ? { avatarShape: item.avatarShape as string } : {}),
+      ...(avatarUrl ? { avatarUrl } : {}),
       ...(capabilities ? { capabilities } : {}),
     };
   });
@@ -343,6 +356,11 @@ function decodeFrame(frame: RecordValue): ServerFrame | null {
     case "typing":
       requireValid(id(frame.agentId) && typeof frame.active === "boolean");
       return { type: "typing", agentId: frame.agentId, active: frame.active };
+    case "reaction":
+      requireValid(id(frame.messageId) && id(frame.userId) && oneOf(frame.op, ["add", "remove"]) && timestamp(frame.at));
+      // Reactions are user content: 1–16 code points, like the REST body.
+      requireValid(typeof frame.emoji === "string" && frame.emoji.trim().length > 0 && [...frame.emoji].length <= 16);
+      return { type: "reaction", messageId: frame.messageId, emoji: frame.emoji, userId: frame.userId, op: frame.op, at: frame.at };
     default:
       return null;
   }

@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
-import { ArrowDown, ChevronLeft, MessageCircle, Settings, Monitor } from "lucide-react-native";
-import { useRouter } from "expo-router";
+import { ArrowDown, ChevronLeft, Info, MessageCircle, Search, Settings, Monitor } from "lucide-react-native";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
+import { avatarFields } from "@/lib/avatar";
 import { MessageBubble } from "./MessageBubble";
+import { FindInChat } from "./FindInChat";
 import { ActivityChip } from "./ActivityChip";
 import { Composer } from "./Composer";
 import { StatusBanner } from "./StatusBanner";
-import { formatDay, formatTime, useStore } from "@/lib/store";
-import { previewFromMessages } from "@/lib/chat-state";
+import { useStore } from "@/lib/store";
+import { buildTranscriptRows, previewFromMessages } from "@/lib/chat-state";
+import { findMatches } from "@/lib/find-in-chat";
 import { useReducedMotion } from "@/lib/use-reduced-motion";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { UPLOAD_NOTICE } from "@/lib/use-file-drop-guard";
@@ -20,13 +23,13 @@ import { interactionPending } from "@/lib/interactions";
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const CIRCLE = "h-11 w-11 shrink-0 items-center justify-center rounded-full bg-raised active:bg-raised-hover";
 const ICON = "#d4d4d4";
-const SEPARATOR_GAP = 30 * 60_000;
 const HISTORY_PAGE_SIZE = 50;
+const FIND_STRIP_HEIGHT = 52;
 type HistoryStart = { agentId: string; id: string };
 type HistoryAnchor = { agentId: string; height: number; y: number; element?: HTMLElement; offset?: number };
 
-export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View> }) {
-  const { agents, selectedId, messagesByAgent, typing, setSidebarOpen, retryMessage, connection } = useStore();
+export function ChatPane({ agentListButtonRef, onOpenInfo }: { agentListButtonRef?: Ref<View>; onOpenInfo?: () => void }) {
+  const { agents, selectedId, messagesByAgent, typing, setSidebarOpen, retryMessage, removeMessage, connection, loadHistory, canLoadHistory, unreadWindowByAgent } = useStore();
   const agent = agents.find((item) => item.id === selectedId);
   const allMessages = messagesByAgent[selectedId] ?? EMPTY_MESSAGES;
   // Tool events never become transcript rows, dates, quotes or history pages.
@@ -54,19 +57,38 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   const contentHeight = useRef(0);
   const [historyStart, setHistoryStart] = useState<HistoryStart | null>(null);
   const [historyNotice, setHistoryNotice] = useState("");
+  const [historyCursor, setHistoryCursor] = useState<number | null | undefined>(undefined);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [attachmentNoticeAgent, setAttachmentNoticeAgent] = useState<string | null>(null);
   const attachmentNotice = !!selectedId && attachmentNoticeAgent === selectedId;
   const setAttachmentNotice = useCallback((visible: boolean) => {
     setAttachmentNoticeAgent(visible ? selectedId : null);
   }, [selectedId]);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findCurrent, setFindCurrent] = useState(0);
+  // The home route stays mounted under pushed screens; only react to the keyboard
+  // while this chat screen is actually focused.
+  const findFocusedRef = useRef(false);
+  useFocusEffect(useCallback(() => {
+    findFocusedRef.current = true;
+    return () => { findFocusedRef.current = false; };
+  }, []));
   const firstVisibleMessage = useRef<HistoryStart | null>(null);
   const historyAnchor = useRef<HistoryAnchor | null>(null);
   const requestPositions = useRef(new Map<string, number>());
   const requestToReveal = useRef<string | null>(null);
+  const revealOffset = useRef(8);
   const recentStart = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
   const rememberedStart = historyStart?.agentId === selectedId ? messages.findIndex((message) => message.id === historyStart.id) : -1;
   const visibleStart = rememberedStart < 0 ? recentStart : Math.min(recentStart, rememberedStart);
   const visibleMessages = useMemo(() => messages.slice(visibleStart), [messages, visibleStart]);
+  const canLoadEarlier = visibleStart > 0 || (canLoadHistory && historyCursor !== null);
+  const findMatchesList = useMemo(() => findMatches(messages, findQuery), [messages, findQuery]);
+  const findCurrentId = findMatchesList[findCurrent]?.messageId;
+  const findMatchedIds = useMemo(() => new Set(findMatchesList.map((match) => match.messageId)), [findMatchesList]);
+  const findHighlight = (id: string): "current" | "match" | undefined =>
+    !findOpen || !findQuery ? undefined : id === findCurrentId ? "current" : findMatchedIds.has(id) ? "match" : undefined;
 
   useLayoutEffect(() => {
     firstVisibleMessage.current = visibleMessages[0] ? { agentId: selectedId, id: visibleMessages[0].id } : null;
@@ -128,17 +150,63 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     const y = requestPositions.current.get(id);
     if (y === undefined) return;
     requestToReveal.current = null;
-    scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: false });
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - revealOffset.current), animated: false });
   }, []);
   const reviewRequest = () => {
     const message = pendingRequests[0];
     if (!message) return;
     pauseFollowing();
+    revealOffset.current = 8;
     requestToReveal.current = message.id;
     const index = messages.findIndex((item) => item.id === message.id);
     if (index < visibleStart) setHistoryStart({ agentId: selectedId, id: message.id });
     else scrollToRequest(message.id);
   };
+
+  const revealMatch = useCallback((id: string) => {
+    const index = messages.findIndex((message) => message.id === id);
+    if (index < 0) return;
+    pauseFollowing();
+    revealOffset.current = FIND_STRIP_HEIGHT;
+    if (index < visibleStart) {
+      requestToReveal.current = id;
+      setHistoryStart({ agentId: selectedId, id });
+      return;
+    }
+    if (requestPositions.current.has(id)) scrollToRequest(id);
+    else requestToReveal.current = id;
+  }, [messages, visibleStart, selectedId, pauseFollowing, scrollToRequest]);
+
+  const stepFind = useCallback((delta: number) => {
+    if (!findMatchesList.length) return;
+    setFindCurrent((index) => (index + delta + findMatchesList.length) % findMatchesList.length);
+  }, [findMatchesList.length]);
+
+  useEffect(() => {
+    setFindCurrent(0);
+  }, [findQuery]);
+
+  useEffect(() => {
+    setFindCurrent((index) => findMatchesList.length === 0 ? 0 : Math.min(index, findMatchesList.length - 1));
+  }, [findMatchesList]);
+
+  useEffect(() => {
+    if (!findOpen || !findCurrentId) return;
+    revealMatch(findCurrentId);
+  }, [findOpen, findCurrentId, findMatchesList, revealMatch]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!findFocusedRef.current || event.altKey) return;
+      if ((event.metaKey || event.ctrlKey) && (event.key === "f" || event.key === "F")) {
+        event.preventDefault();
+        setFindOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
@@ -193,6 +261,8 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
     requestToReveal.current = null;
     setHistoryStart(null);
     setHistoryNotice("");
+    setHistoryCursor(undefined);
+    setHistoryLoading(false);
     setAttachmentNoticeAgent(null);
     setPinned(true);
     scrollToLatest();
@@ -232,10 +302,36 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
       setPinned(next);
     }
   }, [keepVisibleHistory]);
-  const rows = useMemo(() => buildRows(visibleMessages), [visibleMessages]);
+  const unreadWindow = unreadWindowByAgent[selectedId];
+  const rows = useMemo(() => buildTranscriptRows(visibleMessages, unreadWindow), [visibleMessages, unreadWindow]);
+
+  const loadServerEarlier = async () => {
+    if (!canLoadHistory || historyLoading || historyCursor === null) return;
+    const node = Platform.OS === "web" ? scrollRef.current?.getScrollableNode() as HTMLElement | undefined : undefined;
+    const top = node?.getBoundingClientRect().top ?? 0;
+    const element = node ? Array.from(node.querySelectorAll<HTMLElement>('[data-testid^="transcript-row-"]'))
+      .find((row) => row.getBoundingClientRect().bottom > top) : undefined;
+    historyAnchor.current = { agentId: selectedId, height: node?.scrollHeight ?? contentHeight.current,
+      y: node?.scrollTop ?? lastScrollY.current, element, offset: element ? element.getBoundingClientRect().top - top : undefined };
+    pauseFollowing();
+    setHistoryLoading(true);
+    try {
+      const { nextBefore, added } = await loadHistory(selectedId, historyCursor ?? undefined);
+      setHistoryCursor(nextBefore);
+      if (added[0]) setHistoryStart({ agentId: selectedId, id: added[0].id });
+      setHistoryNotice(added.length ? `${added.length} earlier messages loaded.` : "All available history is shown.");
+    } catch {
+      historyAnchor.current = null;
+      setHistoryNotice("Earlier messages could not be loaded.");
+    } finally {
+      setHistoryLoading(false);
+      focusTranscript();
+    }
+  };
 
   const loadEarlier = () => {
-    if (!visibleStart || historyAnchor.current) return;
+    if (historyAnchor.current || historyLoading) return;
+    if (!visibleStart) { void loadServerEarlier(); return; }
     const node = Platform.OS === "web" ? scrollRef.current?.getScrollableNode() as HTMLElement | undefined : undefined;
     const top = node?.getBoundingClientRect().top ?? 0;
     const element = node ? Array.from(node.querySelectorAll<HTMLElement>('[data-testid^="transcript-row-"]'))
@@ -285,15 +381,22 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
         <View className={cn("min-w-0 flex-1 flex-row", compact ? "justify-center" : "justify-start")}>
           {agent ? <Pressable onPress={() => router.push("/bots")} accessibilityRole="button" accessibilityLabel="Bot details"
             className="min-h-11 max-w-full flex-row items-center gap-2.5 rounded-full bg-raised py-1 pl-1 pr-4 active:bg-raised-hover">
-            <BlobAvatar color={agent.color} name={agent.name} size={36} />
+            <BlobAvatar name={agent.name} size={36} {...avatarFields(agent)} />
             <Text className="min-w-0 shrink text-[17px] font-medium text-ink" numberOfLines={1}>{agent.name}</Text>
           </Pressable> : <View className="min-h-11 flex-row items-center gap-2.5 px-2">
             <MessageCircle size={24} color="#459ffe" />
             <Text className="text-[17px] font-medium text-ink" accessibilityRole="header">Zakura Bot</Text>
           </View>}
         </View>
-        {agent ? <Pressable onPress={() => router.push({ pathname: "/desktop", params: { agentId: agent.id } })} accessibilityRole="button" accessibilityLabel="View bot desktop"
-          className={CIRCLE}><Monitor size={20} color={ICON} /></Pressable> : compact ? <View className="h-11 w-11" /> : null}
+        {agent ? <View className="flex-row items-center gap-2">
+          {Platform.OS !== "web" ? <Pressable onPress={() => setFindOpen(true)} accessibilityRole="button"
+            accessibilityLabel="Find in chat" className={CIRCLE}><Search size={20} color={ICON} /></Pressable> : null}
+          {compact || onOpenInfo ? <Pressable onPress={() => compact
+            ? router.push({ pathname: "/agent-info", params: { agentId: agent.id } }) : onOpenInfo?.()}
+            accessibilityRole="button" accessibilityLabel="Agent info" className={CIRCLE}><Info size={20} color={ICON} /></Pressable> : null}
+          <Pressable onPress={() => router.push({ pathname: "/desktop", params: { agentId: agent.id } })} accessibilityRole="button" accessibilityLabel="View bot desktop"
+            className={CIRCLE}><Monitor size={20} color={ICON} /></Pressable>
+        </View> : compact ? <View className="h-11 w-11" /> : null}
       </View>
 
       <View className="mx-auto w-full max-w-4xl pt-3"><StatusBanner onFocusLost={focusTranscript}
@@ -313,6 +416,11 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
           </ScrollView>
         ) : <>
           <View className="min-h-0 min-w-0 flex-1">
+            {findOpen ? <View className="absolute left-0 right-0 top-0 z-10">
+              <FindInChat query={findQuery} onQueryChange={setFindQuery} matchCount={findMatchesList.length}
+                currentMatch={findCurrent} onPrev={() => stepFind(-1)} onNext={() => stepFind(1)}
+                onClose={() => { setFindOpen(false); focusTranscript(); }} />
+            </View> : null}
             <ScrollView ref={scrollRef} testID="chat-transcript" className={`min-w-0 flex-1${pinned ? " transcript-following" : ""}`}
               role={Platform.OS === "web" ? "region" : undefined} tabIndex={Platform.OS === "web" ? 0 : undefined}
               accessibilityLabel={`Conversation with ${agent.name}`} onScroll={onScroll} scrollEventThrottle={32}
@@ -325,28 +433,31 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
               keyboardDismissMode={Platform.OS === "web" ? "none" : Platform.OS === "ios" ? "interactive" : "on-drag"} keyboardShouldPersistTaps="handled"
               contentContainerStyle={{ paddingTop: 8, paddingBottom: 12, paddingHorizontal: compact ? 12 : 24,
                 maxWidth: 900, width: "100%", alignSelf: "center", flexGrow: rows.length === 0 ? 1 : undefined }}>
-              {visibleStart > 0 || historyNotice ? <View className="mb-3 items-center gap-2">
-                {visibleStart > 0 ? <Pressable onPress={loadEarlier} accessibilityRole="button" accessibilityLabel="Load earlier messages"
-                  className="min-h-11 justify-center rounded-xl border border-hairline bg-panel px-4 py-3 active:bg-raised">
+              {canLoadEarlier || historyNotice ? <View className="mb-3 items-center gap-2">
+                {canLoadEarlier ? <Pressable onPress={loadEarlier} disabled={historyLoading} accessibilityRole="button" accessibilityLabel="Load earlier messages"
+                  className={`min-h-11 justify-center rounded-xl border border-hairline bg-panel px-4 py-3 active:bg-raised${historyLoading ? " opacity-60" : ""}`}>
                   <Text className="text-[13px] text-ink">Earlier messages</Text>
                 </Pressable> : null}
                 <Text accessibilityLiveRegion="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 }}>
                   {historyNotice}
                 </Text>
               </View> : null}
-              {rows.length === 0 && !activeTool ? <EmptyThread name={agent.name} color={agent.color} offline={agent.status === "offline"} /> : null}
-              {rows.map((row) => row.kind === "day" ? (
-                <Text key={row.key} className="my-4 text-center text-[13px] text-ink-secondary">{row.label}</Text>
-              ) : <View key={`message_${row.message.id}`} testID={`transcript-row-${row.message.id}`}
-                onLayout={row.message.interaction ? (event) => {
-                  requestPositions.current.set(row.message.id, event.nativeEvent.layout.y);
-                  if (requestToReveal.current === row.message.id) scrollToRequest(row.message.id);
-                } : undefined}>
-                <MessageBubble message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
-                replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
-                retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
-                onRetry={(id) => void retryMessage(id)} onFocusLost={focusTranscript} />
-              </View>)}
+              {rows.length === 0 && !activeTool ? <EmptyThread name={agent.name} offline={agent.status === "offline"} {...avatarFields(agent)} /> : null}
+              {rows.map((row) => {
+                if (row.kind === "day") return <Divider key={row.key} label={row.label} />;
+                if (row.kind === "unread") return <Divider key={row.key} label={row.label} strong />;
+                return <View key={`message_${row.message.id}`} testID={`transcript-row-${row.message.id}`}
+                  onLayout={(event) => {
+                    requestPositions.current.set(row.message.id, event.nativeEvent.layout.y);
+                    if (requestToReveal.current === row.message.id) scrollToRequest(row.message.id);
+                  }}>
+                  <MessageBubble message={row.message} grouped={row.grouped} reducedMotion={reducedMotion}
+                  highlight={findHighlight(row.message.id)}
+                  replyTarget={row.message.replyTo ? replyTargets.get(row.message.replyTo) : undefined}
+                  retryDisabled={connection !== "connected" || busy || deliveryPending || agent.status === "offline"}
+                  onRetry={(id) => void retryMessage(id)} onDelete={(id) => removeMessage(id)} onFocusLost={focusTranscript} />
+                </View>;
+              })}
               {activeTool ? <ActivityChip tool={activeTool} reducedMotion={reducedMotion} agent={agent} /> : null}
             </ScrollView>
             {!pinned ? <Pressable ref={setJumpRef} onPress={() => {
@@ -373,34 +484,23 @@ export function ChatPane({ agentListButtonRef }: { agentListButtonRef?: Ref<View
   );
 }
 
-type Row = { kind: "day"; key: string; label: string } | { kind: "msg"; message: ChatMessage; grouped: boolean };
-function buildRows(messages: ChatMessage[]): Row[] {
-  const rows: Row[] = [];
-  let lastDay = "";
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    const day = new Date(message.createdAt).toDateString();
-    const previous = messages[index - 1];
-    // Grok Bot shows one quiet "Today 22:57" marker per day or after a pause,
-    // instead of a timestamp under every bubble.
-    if (day !== lastDay || (previous && message.createdAt - previous.createdAt >= SEPARATOR_GAP)) {
-      rows.push({ kind: "day", key: `day_${message.id}`, label: `${formatDay(message.createdAt)} ${formatTime(message.createdAt)}` });
-      lastDay = day;
-    }
-    const next = messages[index + 1];
-    const grouped = !!next && next.kind === "text" && message.kind === "text" && next.role === message.role &&
-      new Date(next.createdAt).toDateString() === day && next.createdAt - message.createdAt < 60_000;
-    rows.push({ kind: "msg", message, grouped });
-  }
-  return rows;
+type DividerProps = { label: string; strong?: boolean };
+function Divider({ label, strong }: DividerProps) {
+  return (
+    <View role={Platform.OS === "web" ? "separator" : undefined} className="my-4 flex-row items-center gap-3">
+      <View className="h-px flex-1 bg-hairline" />
+      <Text className={cn("text-[12px] text-ink-secondary", strong && "text-ink")}>{label}</Text>
+      <View className="h-px flex-1 bg-hairline" />
+    </View>
+  );
 }
 
-function EmptyThread({ name, color, offline }: {
-  name: string; color: string; offline: boolean;
+function EmptyThread({ name, color, shape, url, offline }: {
+  name: string; color: string; shape: string | null; url: string | null; offline: boolean;
 }) {
   return (
     <View className="flex-1 items-center justify-center px-4 py-12">
-      <BlobAvatar color={color} name={name} size={64} />
+      <BlobAvatar color={color} name={name} size={64} shape={shape} url={url} />
       <Text className="mt-5 w-full text-center text-[20px] font-semibold text-ink" numberOfLines={2}>{name}</Text>
       {offline ? <Text className="mt-2 text-[13px] text-ink-secondary">Offline</Text> : null}
     </View>

@@ -27,10 +27,20 @@ export function SignIn() {
   useEffect(() => {
     if (Platform.OS !== "web") return;
     const onMessage = (event: MessageEvent) => {
-      const data = event.data as { source?: string; code?: string; state?: string } | null;
-      if (event.origin !== window.location.origin || data?.source !== "zakura-bot-oauth" || !data.code) return;
+      const data = event.data as { source?: string; code?: string; state?: string; error?: string } | null;
+      if (event.origin !== window.location.origin || data?.source !== "zakura-bot-oauth") return;
+      if (data.error) {
+        setBusy(false);
+        setError(data.error === "access_denied" ? "Authorization was declined. You can start again." : `Zakura authorization failed: ${data.error}.`);
+        return;
+      }
+      if (!data.code) return;
       const pending = takePendingLogin();
-      if (!pending || !startRef.current) return;
+      if (!pending || !startRef.current) {
+        setBusy(false);
+        setError("Sign-in window expired. Please try again.");
+        return;
+      }
       setBusy(true); setError(null);
       settle(pending.baseUrl, startRef.current.verifier, data.code, data.state ?? startRef.current.state,
         pending.clientId, pending.redirectUri)
@@ -58,7 +68,7 @@ export function SignIn() {
       } else {
         const result = await WebBrowser.openAuthSessionAsync(start.authorizationUrl, start.redirectUri);
         if (result.type !== "success") throw new Error("Authorization was cancelled. You can start again.");
-        const code = codeFromRedirect(result.url, start.state);
+        const code = codeFromRedirect(result.url, start.state, baseUrl);
         await settle(baseUrl, start.verifier, code, start.state, clientId, start.redirectUri);
       }
     } catch (cause) {
@@ -73,7 +83,7 @@ export function SignIn() {
     contentContainerStyle={{ padding: 24, paddingTop: Math.max(insets.top, 48), paddingBottom: Math.max(insets.bottom, 24), maxWidth: 560, width: "100%", alignSelf: "center" }}>
     <View className="mb-8 items-center"><View className="h-16 w-16 rounded-full bg-ink" /></View>
     <Text className="mb-2 text-center text-[24px] font-medium text-ink" accessibilityRole="header">Connect to Zakura</Text>
-    <Text className="mb-6 text-center text-[13px] leading-5 text-ink-secondary">Sign in with your Zakura account. Zakura Bot uses your own permissions: every agent you can reach, with no extra setup.</Text>
+    <Text className="mb-6 text-center text-[13px] leading-5 text-ink-secondary">Zakura is all you need.</Text>
     <View className="mb-5 overflow-hidden rounded-3xl bg-panel">
       <View className="mx-4 min-h-14 flex-row items-center gap-4 py-2">
         <Text className="text-[16px] text-ink">Instance</Text>
@@ -86,7 +96,13 @@ export function SignIn() {
       className="min-h-12 flex-row items-center justify-center gap-2 rounded-full bg-ink px-4 py-3">
       {busy ? <ActivityIndicator color="#070707" /> : null}<Text className="font-semibold text-app">{busy ? "Connecting…" : "Sign in with Zakura"}</Text>
     </Pressable>
-    {error || authNotice ? <Text accessibilityRole="alert" className="my-4 text-[14px] leading-6 text-danger">{error ?? authNotice}</Text> : null}
+    {error || authNotice ? <View className="my-4 min-w-0 flex-row items-center gap-3">
+      <Text accessibilityRole="alert" className="min-w-0 flex-1 text-[14px] leading-6 text-danger">{error ?? authNotice}</Text>
+      {error ? <Pressable onPress={() => void begin()} accessibilityRole="button" accessibilityLabel="Retry sign in"
+        className="rounded-full border border-hairline px-4 py-2 active:bg-raised/40">
+        <Text className="text-[14px] text-ink">Retry</Text>
+      </Pressable> : null}
+    </View> : null}
     {profiles.length ? <View className="mt-6 overflow-hidden rounded-3xl bg-panel">
       {profiles.map((profile, index) => <Pressable key={profile.id} onPress={() => void choose(profile.id)} accessibilityRole="button"
         accessibilityLabel={`Switch to ${profile.label}`} className="active:bg-raised/40">

@@ -22,10 +22,11 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   pendingRequests?: number;
   onReviewRequest?: () => void;
 }) {
-  const { selectedId, agents, settings, draftsByAgent, setDraft, clearDraft, send, interrupt, interrupting, connection,
-    attachmentsByAgent, addAttachments, clearAttachments, retryAttachment } = useStore();
+  const { selectedId, agents, settings, draftsByAgent, messagesByAgent, setDraft, clearDraft, send, interrupt, interrupting, connection,
+    attachmentsByAgent, addAttachments, clearAttachments, retryAttachment, cancelQueued } = useStore();
   const text = draftsByAgent[selectedId] ?? "";
   const attachments = attachmentsByAgent[selectedId] ?? [];
+  const queued = (messagesByAgent[selectedId] ?? []).filter((message) => message.role === "user" && message.queued);
   const filesAvailable = !settings.useMockChannel && !!agents.find((agent) => agent.id === selectedId)?.capabilities?.files;
   const { height: windowHeight } = useWindowDimensions();
   // Leave room for connection recovery controls in short windows. Longer
@@ -42,9 +43,12 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
   const inputRef = useRef<TextInput>(null);
   const actionRef = useRef<View | null>(null);
   const offline = connection !== "connected" || agentOffline;
+  const disconnected = connection !== "connected";
   const stopping = !!interrupting[selectedId];
   const sendingMessage = submitting || deliveryPending;
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && attachments.every((row) => row.status === "ready") && !busy && !offline && !sendingMessage;
+  // A dropped channel still accepts the draft into the queue; only an
+  // unavailable bot blocks sending.
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && attachments.every((row) => row.status === "ready") && !busy && !agentOffline && !sendingMessage;
   useEffect(() => { setAttachmentMenu(false); setPickerError(null); }, [selectedId, settings.profileId]);
   const queueFiles = useCallback((files: File[]) => {
     try { addAttachments(selectedId, browserFiles(files)); setPickerError(null); setAttachmentNotice(false); }
@@ -179,7 +183,8 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
           placeholder={`Ask ${agentName}`}
           placeholderTextColor="#8f8f8f"
           accessibilityLabel={`Message ${agentName}`}
-          accessibilityHint={offline ? "You can write a draft; sending is unavailable while offline." : hint}
+          accessibilityHint={agentOffline ? "You can write a draft; sending is unavailable while this bot is offline."
+            : disconnected ? "Messages you send now will be sent when reconnected." : hint}
           className="min-w-0 flex-1 py-3 text-[16px] leading-5 text-ink"
           style={{ height: Math.min(height, maxInputHeight), maxHeight: maxInputHeight, textAlignVertical: "top" }}
           maxLength={MAX_MESSAGE_LENGTH}
@@ -225,6 +230,15 @@ export function Composer({ agentName, busy, deliveryPending = false, agentOfflin
           </Pressable>
         )}
       </View>
+      {queued.map((message) => (
+        <View key={message.id} className="mx-auto mt-2 w-full max-w-3xl flex-row items-center justify-between gap-2 px-2">
+          <Text className="min-w-0 flex-1 text-[11px] leading-4 text-ink-secondary" numberOfLines={2}>Will send when reconnected</Text>
+          <Pressable onPress={() => cancelQueued(message.id)} accessibilityRole="button" accessibilityLabel="Cancel queued message"
+            className="min-h-9 shrink-0 justify-center rounded-lg px-2 active:bg-raised">
+            <Text className="text-[11px] leading-4 text-ink-secondary">Cancel</Text>
+          </Pressable>
+        </View>
+      ))}
       {windowHeight >= 400 && (hint || text.length > MAX_MESSAGE_LENGTH * 0.8) ? <View className="mx-auto mt-2 w-full max-w-3xl flex-row items-start justify-between gap-2 px-2">
         {hint ? <Text accessibilityLiveRegion={attachmentNotice ? "polite" : "none"}
           className={cn("min-w-0 flex-1 text-[11px] leading-4", attachmentNotice ? "text-warning" : "text-ink-secondary")}>{hint}</Text> : null}

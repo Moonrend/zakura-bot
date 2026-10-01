@@ -6,18 +6,21 @@ import {
 } from "./channel";
 import { DEMO_AGENTS } from "./channel/mock-client";
 import { MAX_MESSAGE_LENGTH } from "./channel/types";
-import { chatReducer, emptyChatState, isAgentWorking, previewFromMessages, type ChatAction, type ChannelError } from "./chat-state";
+import { chatReducer, emptyChatState, isAgentWorking, previewFromMessages, type ChatAction, type ChannelError, type UnreadWindow } from "./chat-state";
 import { loadSettings, saveSettings, loadProfiles, saveProfile, readCredentials, writeCredentials, removeProfile } from "./settings";
 import { CredentialSession, instanceUrl, refreshOAuthToken, revokeOAuthToken, zakuraRequest, zakuraBinaryRequest,
   tokensFromOAuth, type InstanceProfile, type OAuthTokens, type ZakuraBinary } from "./auth";
-import { agentPath, agentsPath, mePath, parseAccountInfo, parseAgentDetail, type AgentDraft, type ManagedAgent } from "./agents";
+import { agentPath, agentsPath, listSpaces, mePath, parseAccountInfo, parseAgentDetail, resolveSpaceId, type AgentDraft, type ManagedAgent, type SpaceInfo } from "./agents";
 import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type BotSession, type InteractionAnswer, type MessageAttachment } from "./types";
 import { emptyGroups, reduceGroups, type BotGroups, type GroupAction } from "./groups";
 import { loadGroups, saveGroups } from "./group-storage";
+import { loadHiddenBots, saveHiddenBots } from "./hidden-bots";
+import { loadSpaceId, saveSpaceId } from "./space-storage";
 import { botFilePath, fileMessageText, parseUploadedFile, validatePickedFiles, type DraftAttachment, type PickedFile } from "./files";
 import { useAttachmentDrafts } from "./use-attachment-drafts";
 import { attachmentReferences } from "./channel/protocol";
 import { fetchInteraction, submitInteraction } from "./interactions";
+import { addReaction, listReactions, removeReaction, toReactionMap } from "./reactions";
 
 export type { ChannelError } from "./chat-state";
 
@@ -26,17 +29,25 @@ type StoreValue = {
   selectedId: string;
   messagesByAgent: Record<string, ChatMessage[]>;
   draftsByAgent: Record<string, string>;
+  reactionsByAgent: Record<string, Record<string, Record<string, string>>>;
+  unreadWindowByAgent: Record<string, UnreadWindow>;
   typing: Record<string, boolean>;
   interrupting: Record<string, boolean>;
   settings: AppSettings;
   settingsReady: boolean;
   profiles: InstanceProfile[];
   authNotice: string | null;
+  reportAuthError: (message: string) => void;
+  /** 服务端 space 列表；空数组 = 旧服务端（无 spaces），隐藏选择器 */
+  spaces: SpaceInfo[];
+  switchSpace: (space: SpaceInfo) => Promise<void>;
   completeSignIn: (baseUrl: string, clientId: string, tokens: OAuthTokens) => Promise<void>;
   switchInstance: (id: string) => Promise<void>;
   signOut: () => Promise<void>;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
   requestBinary: (path: string, init?: RequestInit) => Promise<ZakuraBinary>;
+  canLoadHistory: boolean;
+  loadHistory: (agentId: string, before?: number) => Promise<{ nextBefore: number | null; added: ChatMessage[] }>;
   attachmentsByAgent: Record<string, DraftAttachment[]>;
   addAttachments: (agentId: string, files: PickedFile[]) => void;
   clearAttachments: (agentId: string, ids: string[]) => void;
@@ -48,9 +59,15 @@ type StoreValue = {
   createAgent: (draft: AgentDraft) => Promise<ManagedAgent>;
   updateAgent: (agentId: string, draft: AgentDraft) => Promise<ManagedAgent>;
   deleteAgent: (agentId: string) => Promise<void>;
+  duplicateAgent: (agentId: string) => Promise<ManagedAgent>;
   groups: BotGroups;
   groupsReady: boolean;
   updateGroups: (action: GroupAction) => Promise<void>;
+  hiddenBots: string[];
+  setAgentHidden: (agentId: string, hidden: boolean) => Promise<void>;
+  setAgentUnread: (agentId: string, unread: boolean) => void;
+  /** The signed-in user id, used to mark which reactions are "mine". */
+  currentUserId: string | null;
   connection: ChannelConnectionState;
   connectionDetail?: string;
   transportLabel: string;
@@ -62,6 +79,11 @@ type StoreValue = {
   clearDraft: (agentId: string, submitted: string) => void;
   send: (text: string, agentId?: string, attachments?: MessageAttachment[]) => Promise<boolean>;
   retryMessage: (messageId: string) => Promise<boolean>;
+  removeMessage: (messageId: string) => void;
+  /** Toggle the current user's reaction: POST a new emoji, or DELETE the one already used. */
+  toggleReaction: (agentId: string, messageId: string, emoji: string) => void;
+  /** Drop a queued send and put its text back into the composer draft. */
+  cancelQueued: (messageId: string) => void;
   respondInteraction: (agentId: string, messageId: string, answer: InteractionAnswer) => Promise<void>;
   refreshInteraction: (agentId: string, messageId: string) => Promise<void>;
   interrupt: () => Promise<void>;
@@ -110,15 +132,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const settingsScope = useMemo(() => channelScope(settings), [settings]);
   const [settingsReady, setSettingsReady] = useState(false);
   const [profiles, setProfiles] = useState<InstanceProfile[]>([]);
+  const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Record<string, BotSession>>({});
   const [canManage, setCanManage] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const currentUserIdRef = useRef<string | null>(null);
   const [groups, setGroups] = useState<BotGroups>(emptyGroups);
   const [groupsReady, setGroupsReady] = useState(false);
   const groupsRef = useRef(groups);
   const groupsScopeRef = useRef<string | null>(null);
   const groupsQueue = useRef<Promise<void>>(Promise.resolve());
+  const [hiddenBots, setHiddenBots] = useState<string[]>([]);
+  const hiddenRef = useRef(hiddenBots);
+  const hiddenScopeRef = useRef<string | null>(null);
+  const hiddenQueue = useRef<Promise<void>>(Promise.resolve());
   const tokenProviderRef = useRef<(() => Promise<string>) | null>(null);
+  const authFailureRef = useRef<((detail?: string) => void) | null>(null);
+  // A rejected token is terminal: offline queueing must not hold sends for it.
+  const terminalRef = useRef(false);
   const [transportLabel, setTransportLabel] = useState("Mock");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const clientRef = useRef<ZakuraChannelClient | null>(null);
@@ -128,6 +160,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const screenVisible = useRef(false);
   const foreground = useRef(true);
+  const flushingQueue = useRef(false);
+  const reactionFetches = useRef<{ scope: string; ids: Map<string, Set<string>> }>({ scope: "", ids: new Map() });
 
   const setThreadVisible = useCallback((visible: boolean) => {
     screenVisible.current = visible;
@@ -151,6 +185,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const bootClient = useCallback((nextSettings: AppSettings) => {
     disposeRef.current?.();
+    terminalRef.current = false;
     dispatch({ type: "connection", state: "disconnected" });
     const scope = channelScope(nextSettings);
     // A different server/token must never inherit another channel's roster or drafts.
@@ -161,6 +196,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "reset", agents, messages });
       setSessions({});
       setCanManage(false);
+      setCurrentUserId(null);
+      currentUserIdRef.current = null;
+      reactionFetches.current = { scope: "", ids: new Map() };
       scopeRef.current = scope;
     }
     let session: Promise<CredentialSession> | undefined;
@@ -186,7 +224,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     clientRef.current = client;
     setTransportLabel(client.label);
     const unsubscribe = client.subscribe((event) => {
-      if (clientRef.current === client) dispatch(event);
+      if (clientRef.current !== client) return;
+      if (event.type === "connection") {
+        if (event.authFailure) terminalRef.current = true;
+        else if (event.state === "connected") terminalRef.current = false;
+      }
+      if (event.type === "connection" && event.authFailure) authFailureRef.current?.(event.detail);
+      dispatch(event);
     });
     disposeRef.current = () => {
       unsubscribe();
@@ -203,10 +247,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const scope = channelScope(nextSettings);
       void (async () => {
         const token = await getToken();
-        const me = parseAccountInfo(await zakuraRequest(nextSettings.zakuraBaseUrl, mePath(),
-          { headers: { Authorization: `Bearer ${token}` } }));
-        if (channelScope(settingsRef.current) === scope) setCanManage(me.canManage);
+        const account = await zakuraRequest<unknown>(nextSettings.zakuraBaseUrl, mePath(),
+          { headers: { Authorization: `Bearer ${token}` } });
+        const me = parseAccountInfo(account);
+        if (channelScope(settingsRef.current) === scope) {
+          setCanManage(me.canManage);
+          const userId = (account as { user?: { id?: unknown } } | null)?.user?.id;
+          const resolved = typeof userId === "string" && userId ? userId : null;
+          currentUserIdRef.current = resolved;
+          setCurrentUserId(resolved);
+        }
       })().catch(() => undefined);
+      // 协议 v1 向后兼容：旧服务端无 /spaces（或返回空）时视为单 space，隐藏选择器
+      void (async () => {
+        const token = await getToken();
+        const rows = await listSpaces(nextSettings.zakuraBaseUrl, token);
+        if (channelScope(settingsRef.current) === scope) setSpaces(rows);
+      })().catch(() => setSpaces([]));
     }
   }, [dispatch]);
 
@@ -266,6 +323,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; groupsScopeRef.current = null; };
   }, [settingsReady, settingsScope]);
 
+  useEffect(() => {
+    if (!settingsReady) return;
+    let cancelled = false;
+    hiddenScopeRef.current = null;
+    hiddenRef.current = []; setHiddenBots(hiddenRef.current);
+    void loadHiddenBots(settingsScope).then((loaded) => {
+      if (cancelled) return;
+      hiddenRef.current = loaded; hiddenScopeRef.current = settingsScope; setHiddenBots(loaded);
+    }).catch((error: unknown) => { if (!cancelled) setAuthNotice(error instanceof Error ? error.message : "Could not load hidden bots."); });
+    return () => { cancelled = true; hiddenScopeRef.current = null; };
+  }, [settingsReady, settingsScope]);
+
   const updateGroups = useCallback((action: GroupAction) => {
     const scope = groupsScopeRef.current;
     const pending = groupsQueue.current.catch(() => undefined).then(async () => {
@@ -277,6 +346,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     groupsQueue.current = pending;
     return pending;
   }, []);
+
+  const setAgentHidden = useCallback((agentId: string, hidden: boolean) => {
+    const scope = hiddenScopeRef.current;
+    const pending = hiddenQueue.current.catch(() => undefined).then(async () => {
+      if (!scope || scope !== hiddenScopeRef.current) throw new Error("Wait for this instance’s bots to load.");
+      const next = hidden ? (hiddenRef.current.includes(agentId) ? hiddenRef.current : [...hiddenRef.current, agentId])
+        : hiddenRef.current.filter((id) => id !== agentId);
+      await saveHiddenBots(scope, next);
+      if (scope === hiddenScopeRef.current) { hiddenRef.current = next; setHiddenBots(next); }
+    });
+    hiddenQueue.current = pending;
+    return pending;
+  }, []);
+
+  const setAgentUnread = useCallback((agentId: string, unread: boolean) => {
+    if (stateRef.current.agents.some((agent) => agent.id === agentId)) dispatch({ type: "read", agentId, unread });
+  }, [dispatch]);
 
   const selectAgent = useCallback((agentId: string) => dispatch({ type: "select", agentId }), [dispatch]);
   const setDraft = useCallback((agentId: string, text: string) => {
@@ -304,6 +390,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (channelScope(settingsRef.current) !== scope) throw new Error("The active instance changed. Please try again.");
     return result;
   }, []);
+  const loadHistory = useCallback(async (agentId: string, before?: number) => {
+    const client = clientRef.current;
+    if (!client?.fetchHistory) throw new Error("This channel cannot load earlier history.");
+    const scope = channelScope(settingsRef.current);
+    const added: ChatMessage[] = [];
+    let cursor = before;
+    // The live server's socket replay has no seq, so the first REST page can
+    // repeat it. Advance until a page contributes older rows or history ends.
+    for (let page = 0; page < 20; page++) {
+      const result = await client.fetchHistory(agentId, cursor);
+      if (channelScope(settingsRef.current) !== scope) throw new Error("The active instance changed.");
+      let fresh = 0;
+      for (const message of result.messages) {
+        const known = (stateRef.current.messagesByAgent[agentId] ?? []).some((existing) =>
+          existing.id === message.id || existing.serverId === message.id ||
+          (message.clientMessageId !== undefined &&
+            (existing.id === message.clientMessageId || existing.clientMessageId === message.clientMessageId)));
+        if (!known) { added.push(message); fresh += 1; }
+        dispatch({ type: "message", message });
+      }
+      if (fresh > 0 || result.nextBefore === null) return { nextBefore: result.nextBefore, added };
+      cursor = result.nextBefore;
+    }
+    return { nextBefore: cursor ?? null, added };
+  }, [dispatch]);
   const uploadFile = useCallback(async (agentId: string, file: PickedFile, signal: AbortSignal) => {
     if (!stateRef.current.agents.some((agent) => agent.id === agentId && agent.capabilities?.files)) throw new Error("File uploads are unavailable for this bot.");
     validatePickedFiles([file]);
@@ -350,12 +461,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       current.messagesByAgent[agentId]?.some((message) => message.pending)) return false;
     try { attachmentReferences(attachments); }
     catch (error) { dispatch({ type: "error", agentId, message: error instanceof Error ? error.message : "Invalid attachments." }); return false; }
-    if (agent.status === "offline" || client?.getConnectionState() !== "connected") {
+    const previous = current.messagesByAgent[agentId]?.find((message) => message.id === messageId);
+    const localCreatedAt = previous?.createdAt ?? Date.now();
+    // A rejected token is terminal and an offline agent is unreachable; only a
+    // plain offline/reconnecting channel holds the send in the queue.
+    if (agent.status === "offline" || terminalRef.current) {
       dispatch({ type: "error", agentId, message: "This conversation is offline. Reconnect or choose an available agent." });
       return false;
     }
-    const previous = current.messagesByAgent[agentId]?.find((message) => message.id === messageId);
-    const localCreatedAt = previous?.createdAt ?? Date.now();
+    if (!client || client.getConnectionState() !== "connected") {
+      dispatch({ type: "queue", message: { id: messageId, agentId, role: "user", kind: "text", text: trimmed,
+        createdAt: localCreatedAt, ...(attachments?.length ? { attachments } : {}) } });
+      return true;
+    }
     dispatch({ type: "optimistic", message: { id: messageId, agentId, role: "user", kind: "text", text: trimmed,
       createdAt: localCreatedAt, ...(attachments?.length ? { attachments } : {}) } });
     try {
@@ -372,6 +490,82 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const send = useCallback((text: string, agentId?: string, attachments?: MessageAttachment[]) =>
     deliver(agentId ?? stateRef.current.selectedId, text, uid("user"), attachments), [deliver]);
 
+  // Explicit store-initiated sends after reconnect. The client itself never
+  // retries; this walks the queue once, in send order, through the transport.
+  const flushQueued = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client || client.getConnectionState() !== "connected" || flushingQueue.current) return;
+    flushingQueue.current = true;
+    try {
+      const queued: ChatMessage[] = [];
+      for (const agent of stateRef.current.agents) {
+        for (const message of stateRef.current.messagesByAgent[agent.id] ?? []) {
+          if (message.role === "user" && message.queued) queued.push(message);
+        }
+      }
+      for (const message of queued.sort((a, b) => a.createdAt - b.createdAt)) {
+        if (clientRef.current !== client || client.getConnectionState() !== "connected") break;
+        dispatch({ type: "flush", agentId: message.agentId, messageId: message.id });
+        try {
+          await client.sendMessage({ agentId: message.agentId, text: message.text ?? "", clientMessageId: message.id,
+            localCreatedAt: message.createdAt, attachments: message.attachments });
+        } catch (error) {
+          if (clientRef.current === client) dispatch({ type: "error", agentId: message.agentId, clientMessageId: message.id,
+            message: error instanceof Error ? error.message : "Could not send the message." });
+        }
+      }
+    } finally {
+      flushingQueue.current = false;
+    }
+  }, [dispatch]);
+
+  const cancelQueued = useCallback((messageId: string) => {
+    const agentId = stateRef.current.selectedId;
+    const message = stateRef.current.messagesByAgent[agentId]?.find((item) => item.role === "user" && item.queued === true &&
+      (item.id === messageId || item.clientMessageId === messageId));
+    if (!message) return;
+    dispatch({ type: "cancel_queued", agentId, messageId: message.id });
+    const text = message.text ?? "";
+    const draft = stateRef.current.draftsByAgent[agentId] ?? "";
+    setDraft(agentId, draft.trim() === "" || draft === text ? text : `${text}\n${draft}`);
+  }, [dispatch, setDraft]);
+
+  useEffect(() => {
+    if (state.connection !== "connected") return;
+    void flushQueued();
+  }, [state.connection, flushQueued]);
+
+  // Reactions are not replayed on reconnect, so read them for the loaded page.
+  useEffect(() => {
+    if (state.connection !== "connected" || settings.useMockChannel || !state.selectedId) return;
+    const scope = channelScope(settingsRef.current);
+    const cache = reactionFetches.current;
+    if (cache.scope !== scope) { cache.scope = scope; cache.ids.clear(); }
+    const agentId = state.selectedId;
+    const fetched = cache.ids.get(agentId) ?? new Set<string>();
+    cache.ids.set(agentId, fetched);
+    const targets = (state.messagesByAgent[agentId] ?? [])
+      .filter((message) => message.kind === "text" && !message.pending && !message.queued && !message.failed)
+      .slice(-50).map((message) => message.serverId ?? message.id).filter((id) => !fetched.has(id));
+    if (!targets.length) return;
+    for (const id of targets) fetched.add(id);
+    // Bounded parallel reads; a failed message stays silent and is skipped.
+    const queue = [...targets];
+    for (let worker = 0; worker < Math.min(4, queue.length); worker++) {
+      void (async () => {
+        while (queue.length) {
+          const messageId = queue.shift()!;
+          if (channelScope(settingsRef.current) !== scope) return;
+          try {
+            const rows = await listReactions(request, agentId, messageId);
+            if (channelScope(settingsRef.current) !== scope) return;
+            dispatch({ type: "setReactions", agentId, messageId, reactions: toReactionMap(rows) });
+          } catch { /* Reactions are a quiet overlay; never surface a load failure. */ }
+        }
+      })();
+    }
+  }, [state.connection, state.selectedId, state.messagesByAgent, settings.useMockChannel, request, dispatch]);
+
   const retryMessage = useCallback(async (messageId: string) => {
     const agentId = stateRef.current.selectedId;
     const message = stateRef.current.messagesByAgent[agentId]?.find((item) => item.id === messageId);
@@ -384,6 +578,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
     return ok;
   }, [deliver, clearDraft, clearAttachments, attachmentsByAgent]);
+
+  const removeMessage = useCallback((messageId: string) => {
+    dispatch({ type: "remove_message", agentId: stateRef.current.selectedId, messageId });
+  }, [dispatch]);
+
+  const toggleReaction = useCallback((agentId: string, messageId: string, emoji: string) => {
+    const me = currentUserIdRef.current;
+    const current = stateRef.current;
+    if (!me || !current.agents.some((agent) => agent.id === agentId)) return;
+    const mine = current.reactionsByAgent[agentId]?.[messageId]?.[me];
+    const removing = mine === emoji;
+    const apply = (op: "add" | "remove", value: string) =>
+      dispatch({ type: "reaction", messageId, emoji: value, userId: me, op });
+    apply(removing ? "remove" : "add", emoji);
+    const scope = channelScope(settingsRef.current);
+    const call = removing ? removeReaction(request, agentId, messageId, emoji)
+      : addReaction(request, agentId, messageId, emoji);
+    void call.catch((error: unknown) => {
+      if (channelScope(settingsRef.current) !== scope) return;
+      // Restore the previous reaction before explaining the failure.
+      if (removing) apply("add", emoji);
+      else if (mine === undefined) apply("remove", emoji);
+      else apply("add", mine);
+      dispatch({ type: "error", agentId, message: error instanceof Error ? error.message : "Could not update the reaction." });
+    });
+  }, [dispatch, request]);
 
   const interrupt = useCallback(async () => {
     const agentId = stateRef.current.selectedId;
@@ -442,6 +662,47 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saveQueue.current = pending;
     return pending;
   }, []);
+
+  const reportAuthError = useCallback((message: string) => { setAuthNotice(message); }, []);
+
+  // 4401 rejects the token outright, so reconnecting cannot recover: return to sign-in with the reason.
+  const handleAuthFailure = useCallback(async (detail?: string) => {
+    const notice = detail?.trim() || "Your Zakura session was rejected. Sign in again.";
+    const current = settingsRef.current;
+    if (current.profileId) await removeProfile(current.profileId).catch(() => undefined);
+    await updateSettings({ authToken: "", profileId: "", useMockChannel: true, onboardingComplete: false });
+    setAuthNotice(notice);
+  }, [updateSettings]);
+
+  useEffect(() => {
+    authFailureRef.current = (detail) => void handleAuthFailure(detail);
+    return () => { authFailureRef.current = null; };
+  }, [handleAuthFailure]);
+
+  // 切换绑定的 Space：按账号持久化；roster / 管理页 / 会话随之重载
+  const switchSpace = useCallback(async (space: SpaceInfo) => {
+    await saveSpaceId(channelScope(settingsRef.current), space.id);
+    await updateSettings({ spaceId: space.id, spaceName: space.name });
+    await reconnect();
+  }, [updateSettings, reconnect]);
+
+  // 按账号恢复已选 Space；没有保存过则自动选中默认/第一个 space。
+  useEffect(() => {
+    if (!settingsReady || settings.useMockChannel || !settings.onboardingComplete || !spaces.length) return;
+    const scope = settingsScope;
+    let cancelled = false;
+    void (async () => {
+      const saved = await loadSpaceId(scope).catch(() => null);
+      const next = resolveSpaceId(spaces, saved);
+      if (cancelled || !next) return;
+      if (settingsRef.current.spaceId === next) { await saveSpaceId(scope, next); return; }
+      const space = spaces.find((row) => row.id === next);
+      await saveSpaceId(scope, next);
+      await updateSettings({ spaceId: next, spaceName: space?.name });
+      await reconnect();
+    })().catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [settingsReady, settingsScope, spaces, settings.useMockChannel, settings.onboardingComplete, updateSettings, reconnect]);
 
   const completeSignIn = useCallback(async (baseUrl: string, clientId: string, tokens: OAuthTokens) => {
     const credentials = tokensFromOAuth(tokens);
@@ -502,8 +763,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // Management goes through Zakura's standard agent API with the account's own
   // permissions; the server pushes a fresh roster frame after each change.
   const createAgent = useCallback(async (draft: AgentDraft) => {
-    const result = await request<unknown>(agentsPath(), {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+    const spaceId = draft.spaceId ?? settingsRef.current.spaceId;
+    const body = { ...draft, ...(spaceId ? { spaceId } : {}) };
+    const result = await request<unknown>(agentsPath(spaceId), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return parseAgentDetail(result);
   }, [request]);
   const updateAgent = useCallback(async (agentId: string, draft: AgentDraft) => {
@@ -514,23 +777,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const deleteAgent = useCallback(async (agentId: string) => {
     await request(agentPath(agentId), { method: "DELETE" });
   }, [request]);
+  const duplicateAgent = useCallback(async (agentId: string) => {
+    const result = await request<unknown>(`${agentPath(agentId)}/duplicate`, { method: "POST" });
+    return parseAgentDetail(result);
+  }, [request]);
 
   const value = useMemo<StoreValue>(() => ({
     agents: state.agents, selectedId: state.selectedId, messagesByAgent: state.messagesByAgent,
-    draftsByAgent: state.draftsByAgent,
+    draftsByAgent: state.draftsByAgent, reactionsByAgent: state.reactionsByAgent,
+    unreadWindowByAgent: state.unreadWindowByAgent,
     typing: Object.fromEntries(state.agents.map((agent) => [agent.id, isAgentWorking(state, agent.id)])),
     interrupting: state.interrupting, connection: state.connection,
     connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
-    profiles, authNotice, completeSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
-    canManage, createAgent, updateAgent, deleteAgent,
+    profiles, authNotice, reportAuthError, spaces, switchSpace, completeSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    hiddenBots, setAgentHidden, setAgentUnread, currentUserId,
+    canManage, createAgent, updateAgent, deleteAgent, duplicateAgent,
     requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment,
-    sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, respondInteraction, refreshInteraction, interrupt, reconnect,
+    canLoadHistory: !settings.useMockChannel, loadHistory,
+    sidebarOpen, selectAgent, setDraft, clearDraft, send, retryMessage, removeMessage, toggleReaction, cancelQueued, respondInteraction, refreshInteraction, interrupt, reconnect,
     dismissError, updateSettings, setSidebarOpen, setThreadVisible,
   }), [state, settings, settingsReady, transportLabel, lastError, sidebarOpen, selectAgent, setDraft,
-    clearDraft, send, retryMessage, respondInteraction, refreshInteraction, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
-    profiles, authNotice, completeSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
-    canManage, createAgent, updateAgent, deleteAgent,
-    requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment]);
+    clearDraft, send, retryMessage, removeMessage, toggleReaction, cancelQueued, respondInteraction, refreshInteraction, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
+    profiles, authNotice, reportAuthError, spaces, switchSpace, completeSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    hiddenBots, setAgentHidden, setAgentUnread, currentUserId,
+    canManage, createAgent, updateAgent, deleteAgent, duplicateAgent,
+    requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment, loadHistory]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

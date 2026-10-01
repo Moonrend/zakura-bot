@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { botGroupKey, emptyGroups, groupedAgents, parseGroups, reduceGroups } from "../lib/groups";
+import { parseHiddenBots } from "../lib/hidden-bots";
 import { agents } from "./helpers";
 
 test("group order and membership survive renaming; deleting returns bots to Ungrouped", () => {
@@ -38,6 +39,29 @@ test("invalid names, duplicate names and missing destinations do not change save
 
 test("loading damaged local data preserves valid sections and removes orphaned assignments", () => {
   const state = parseGroups(JSON.parse('{"sections":[null,{"id":"work","name":" Work "},{"id":"work","name":"Duplicate"},{"id":"__proto__","name":"Invalid"}],"assignments":{"a":"work","b":"gone","__proto__":"work"}}'));
-  assert.deepEqual(state, { sections: [{ id: "work", name: "Work" }], assignments: { a: "work" } });
+  assert.deepEqual(state, { sections: [{ id: "work", name: "Work" }], assignments: { a: "work" }, pinned: [] });
   assert.deepEqual(parseGroups(null), emptyGroups());
+});
+
+test("pinned bots render above groups, dedupe, and can be unpinned", () => {
+  let state = reduceGroups(emptyGroups(), { type: "create", id: "work", name: "Work" });
+  state = reduceGroups(state, { type: "assign", botKey: "a", sectionId: "work" });
+  state = reduceGroups(state, { type: "pin", botKey: "a" });
+  state = reduceGroups(state, { type: "pin", botKey: "a" });
+  state = reduceGroups(state, { type: "pin", botKey: "b" });
+  assert.deepEqual(state.pinned, ["a", "b"]);
+  assert.deepEqual(groupedAgents(agents, state).map(({ id, agents: members }) => [id, members.map((bot) => bot.id)]),
+    [["pinned", ["a", "b"]], ["work", []], ["ungrouped", []]]);
+  assert.deepEqual(parseGroups(JSON.parse(JSON.stringify(state))), state);
+  assert.throws(() => reduceGroups(state, { type: "pin", botKey: "__proto__" }));
+  state = reduceGroups(state, { type: "unpin", botKey: "a" });
+  assert.deepEqual(state.pinned, ["b"]);
+  assert.deepEqual(groupedAgents(agents, state).map(({ id, agents: members }) => [id, members.map((bot) => bot.id)]),
+    [["pinned", ["b"]], ["work", ["a"]], ["ungrouped", []]]);
+});
+
+test("hidden bot ids load unique and drop malformed entries", () => {
+  assert.deepEqual(parseHiddenBots(["a", "a", "b", 3, "", null]), ["a", "b"]);
+  assert.deepEqual(parseHiddenBots(null), []);
+  assert.deepEqual(parseHiddenBots({ ids: ["a"] }), []);
 });

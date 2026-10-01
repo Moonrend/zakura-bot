@@ -1,9 +1,11 @@
 import { ActivityIndicator, Text, View } from "react-native";
 import type { Agent, ToolActivity } from "@/lib/types";
 import { BlobAvatar } from "./BlobAvatar";
+import { avatarFields } from "@/lib/avatar";
 
 export function ActivityChip({ tool, reducedMotion = false, agent }: {
-  tool: ToolActivity; reducedMotion?: boolean; agent?: Pick<Agent, "name" | "color">;
+  tool: ToolActivity; reducedMotion?: boolean;
+  agent?: Pick<Agent, "name" | "color" | "avatarColor" | "avatarShape" | "avatarUrl">;
 }) {
   if (tool.interrupted || tool.ok !== undefined) return null;
 
@@ -16,7 +18,7 @@ export function ActivityChip({ tool, reducedMotion = false, agent }: {
   // sits outside the labelled pill so the status text stays exactly the verb.
   return (
     <View className="mb-2 max-w-full flex-row items-center gap-2.5 self-start">
-      {agent ? <BlobAvatar color={agent.color} name={agent.name} size={28} /> : null}
+      {agent ? <BlobAvatar name={agent.name} size={28} {...avatarFields(agent)} /> : null}
       <View testID="tool-activity" accessible accessibilityLabel={label}
         className="flex-row items-center gap-1.5 rounded-full py-1">
         {reducedMotion ? <View className="h-1.5 w-1.5 rounded-full bg-ink-secondary" />

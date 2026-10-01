@@ -1,11 +1,13 @@
 import "../global.css";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Stack } from "expo-router";
 import Head from "expo-router/head";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
-import { Platform, View, useWindowDimensions } from "react-native";
-import { StoreProvider } from "@/lib/store";
+import { Platform, useColorScheme, View, useWindowDimensions } from "react-native";
+import { vars } from "nativewind";
+import { StoreProvider, useStore } from "@/lib/store";
+import { resolveTheme, themeColors, themeVariables } from "@/lib/theme";
 import { useFileDropGuard } from "@/lib/use-file-drop-guard";
 
 // Native splash stays up until hideAsync (expo-splash-screen plugin).
@@ -28,29 +30,50 @@ export default function RootLayout() {
   return (
     <StoreProvider>
       <Head><title>Zakura Bot</title></Head>
-      <View className="flex-1 bg-app" style={{ maxHeight: webViewportHeight }}>
-        <StatusBar style="light" />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: "#070707" },
-            animation: "fade",
-          }}
-        >
-          <Stack.Screen name="index" />
-          <Stack.Screen name="login" />
-          <Stack.Screen name="bots" />
-          <Stack.Screen name="groups" />
-          <Stack.Screen name="desktop" />
-          <Stack.Screen
-            name="settings"
-            options={{
-              presentation: "modal",
-              headerShown: false,
-            }}
-          />
-        </Stack>
-      </View>
+      <ThemedRoot webViewportHeight={webViewportHeight} />
     </StoreProvider>
+  );
+}
+
+function ThemedRoot({ webViewportHeight }: { webViewportHeight?: number }) {
+  const { settings } = useStore();
+  const systemScheme = useColorScheme();
+  const scheme = resolveTheme(settings.theme, systemScheme);
+  const themeStyle = useMemo(() => vars(themeVariables(scheme)), [scheme]);
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const root = document.documentElement;
+    for (const [name, value] of Object.entries(themeVariables(scheme))) {
+      root.style.setProperty(name, value);
+    }
+    document.body.style.backgroundColor = themeColors(scheme).app;
+  }, [scheme]);
+  return (
+    <View className="flex-1 bg-app" style={[themeStyle, { maxHeight: webViewportHeight }]}>
+      <StatusBar style={scheme === "light" ? "dark" : "light"} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: themeColors(scheme).app },
+          animation: "fade",
+        }}
+      >
+        <Stack.Screen name="index" />
+        <Stack.Screen name="login" />
+        <Stack.Screen name="bots" />
+        <Stack.Screen name="bots/new" />
+        <Stack.Screen name="org-chart" />
+        <Stack.Screen name="groups" />
+        <Stack.Screen name="desktop" />
+        <Stack.Screen name="agent-info" />
+        <Stack.Screen
+          name="settings"
+          options={{
+            presentation: "modal",
+            headerShown: false,
+          }}
+        />
+      </Stack>
+    </View>
   );
 }

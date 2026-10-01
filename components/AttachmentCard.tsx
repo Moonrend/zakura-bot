@@ -7,14 +7,16 @@ import { botFilePath, formatFileSize } from "@/lib/files";
 import { blobDataUrl, saveDownload } from "@/lib/media";
 import { attachmentLabel } from "@/lib/message-preview";
 import { ExternalLink } from "./ExternalLink";
+import { MediaViewer } from "./MediaViewer";
 
 export function AttachmentCard({ file, agentId, onFocusLost }: { file: MessageAttachment; agentId: string; onFocusLost?: () => void }) {
   const { requestBinary, settings } = useStore();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const pending = useRef<AbortController | null>(null);
-  useEffect(() => { setPreview(null); setError(null); setBusy(false); return () => { pending.current?.abort(); }; }, [settings.profileId, agentId, file.id]);
+  useEffect(() => { setPreview(null); setError(null); setBusy(false); setViewerOpen(false); return () => { pending.current?.abort(); }; }, [settings.profileId, agentId, file.id]);
   const load = async (download: boolean) => {
     if (busy || !file.id) return;
     const controller = new AbortController(); pending.current = controller;
@@ -37,7 +39,10 @@ export function AttachmentCard({ file, agentId, onFocusLost }: { file: MessageAt
   return <View testID={`attachment-${file.id}`} className="min-w-0 max-w-full gap-2 rounded-xl border border-hairline bg-inset p-3">
     <View className="flex-row items-center gap-2"><Paperclip size={18} color="#b8b8b8" /><Text className="min-w-0 flex-1 text-[13px] font-semibold text-ink" numberOfLines={2}>{file.name ?? "Attachment"}</Text></View>
     <Text className="text-[11px] text-ink-secondary">{[file.size ? formatFileSize(file.size) : null, file.mime].filter(Boolean).join(" · ")}</Text>
-    {preview ? <Image source={{ uri: preview }} style={{ width: 240, height: 180, maxWidth: "100%" }} resizeMode="contain" accessibilityLabel={file.name ?? "Attached image"} /> : null}
+    {preview ? <Pressable accessibilityRole="button" accessibilityLabel={`View ${file.name ?? "image"} full screen`}
+      onPress={() => setViewerOpen(true)} className="self-start active:opacity-90">
+      <Image source={{ uri: preview }} style={{ width: 240, height: 180, maxWidth: "100%" }} resizeMode="contain" accessibilityLabel={file.name ?? "Attached image"} />
+    </Pressable> : null}
     <View className="flex-row flex-wrap gap-3">
       {file.type === "image" && !preview ? <Pressable disabled={busy} accessibilityRole="button" accessibilityLabel={`Preview ${file.name ?? "image"}`} onPress={() => void load(false)} className="min-h-11 justify-center"><Text className="text-[13px] text-accent">View image</Text></Pressable> : null}
       <Pressable disabled={busy} accessibilityRole="button" accessibilityLabel={`Download ${file.name ?? "attachment"}`} onPress={() => void load(true)} className="min-h-11 flex-row items-center gap-2">
@@ -45,5 +50,6 @@ export function AttachmentCard({ file, agentId, onFocusLost }: { file: MessageAt
       </Pressable>
     </View>
     {error ? <Text accessibilityRole="alert" className="text-[12px] text-danger">{error}</Text> : null}
+    <MediaViewer visible={viewerOpen} uri={preview} alt={file.name ?? "Attached image"} onClose={() => setViewerOpen(false)} />
   </View>;
 }

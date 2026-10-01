@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CredentialSession, codeFromRedirect, instanceUrl, tokensFromOAuth, zakuraRequest, ZakuraApiError,
+import { CredentialSession, codeFromRedirect, instanceUrl, tokensFromOAuth, validatePendingState, zakuraRequest, ZakuraApiError,
   type OAuthTokens } from "../lib/auth.js";
 
 const tokens = (access = "jwt-token"): OAuthTokens => ({ access_token: access, refresh_token: "new-refresh", expires_in: 1800 });
@@ -34,11 +34,20 @@ test("expired credentials rotate; invalid responses never become a session", asy
   }), (error: unknown) => error instanceof ZakuraApiError && error.code === "invalid_grant");
 });
 test("redirect parsing validates issuer, state and code", () => {
-  const origin = "https://app.example";
-  assert.equal(codeFromRedirect(`${origin}/oauth/callback?code=abc&state=s1&iss=${encodeURIComponent(origin)}`, "s1"), "abc");
-  assert.throws(() => codeFromRedirect(`${origin}/oauth/callback?code=abc&state=other`, "s1"), /mismatched/);
-  assert.throws(() => codeFromRedirect(`${origin}/oauth/callback?error=access_denied`), /declined/);
-  assert.throws(() => codeFromRedirect(`${origin}/oauth/callback?state=s1`), /did not return/);
-  assert.throws(() => codeFromRedirect(`${origin}/oauth/callback?code=abc&state=s1&iss=${encodeURIComponent("https://evil.example")}`), /issuer/);
+  const callback = "https://app.example/oauth/callback";
+  const server = "https://zakura.example";
+  assert.equal(codeFromRedirect(`${callback}?code=abc&state=s1&iss=${encodeURIComponent(server)}`, "s1", server), "abc");
+  assert.throws(() => codeFromRedirect(`${callback}?code=abc&state=s1&iss=${encodeURIComponent("https://evil.example")}`, "s1", server), /issuer/);
+  assert.equal(codeFromRedirect("zakurabot://oauth?code=abc&state=s1", "s1", server), "abc");
+  assert.equal(codeFromRedirect(`zakurabot://oauth?code=abc&state=s1&iss=${encodeURIComponent("https://evil.example")}`, "s1", server), "abc");
+  assert.throws(() => codeFromRedirect(`${callback}?error=access_denied&iss=${encodeURIComponent("https://evil.example")}`, "s1", server), /declined/);
+  assert.throws(() => codeFromRedirect(`${callback}?code=abc&state=other`, "s1", server), /mismatched/);
+  assert.throws(() => codeFromRedirect(`${callback}?state=s1`, "s1", server), /did not return/);
   assert.throws(() => codeFromRedirect("not a url"), /invalid redirect/);
+});
+test("same-tab callback validates the pending login state before exchanging", () => {
+  assert.equal(validatePendingState("s1", "s1"), null);
+  assert.match(validatePendingState("s1", "other")!, /doesn't match/);
+  assert.match(validatePendingState(null, "s1")!, /doesn't match/);
+  assert.match(validatePendingState("s1", null)!, /no longer available/);
 });

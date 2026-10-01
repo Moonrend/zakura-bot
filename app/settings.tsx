@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Platform, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { Check, ChevronRight, Plus } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import Head from "expo-router/head";
@@ -7,12 +7,25 @@ import Constants from "expo-constants";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStore } from "@/lib/store";
 import { validateLiveSettings } from "@/lib/channel";
-import { DEFAULT_SETTINGS } from "@/lib/types";
+import { applyTheme } from "@/lib/settings";
+import { DEFAULT_SETTINGS, type ThemePreference } from "@/lib/types";
+import { FeedbackSheet } from "@/components/FeedbackSheet";
+import { PluginsModal } from "@/components/PluginsModal";
 import { useScreenFocus } from "@/lib/use-screen-focus";
 import { useFocusOnRemoval } from "@/lib/use-focus-on-removal";
 import { cn } from "@/lib/cn";
 
 const ICON = "#8a8a8a";
+
+const THEMES: { value: ThemePreference; label: string }[] = [
+  { value: "system", label: "Follow system" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
+
+function instanceHost(value: string): string {
+  try { return new URL(value).hostname; } catch { return value; }
+}
 
 // Grok Bot settings: sparse cards of rows, no explanatory prose.
 function Card({ children, className }: { children: ReactNode; className?: string }) {
@@ -23,7 +36,7 @@ function Row({ children, first, className }: { children: ReactNode; first?: bool
 }
 
 export default function SettingsScreen() {
-  const { settings, settingsReady, updateSettings, profiles, switchInstance, signOut, authNotice } = useStore();
+  const { settings, settingsReady, updateSettings, profiles, switchInstance, signOut, authNotice, spaces, switchSpace } = useStore();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [baseUrl, setBaseUrl] = useState(settings.zakuraBaseUrl);
@@ -33,6 +46,9 @@ export default function SettingsScreen() {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
   const screenRef = useRef<ScrollView>(null);
   const headingRef = useRef<Text>(null);
   const headingFocusTarget = useCallback(() => headingRef.current as unknown as HTMLElement | null, []);
@@ -70,6 +86,20 @@ export default function SettingsScreen() {
   };
   const close = () => router.canGoBack() ? router.back() : router.replace("/");
   const version = Constants.expoConfig?.version ?? "";
+  const theme: ThemePreference = settings.theme ?? "system";
+  const activeProfile = profiles.find((profile) => profile.id === settings.profileId);
+  const accountLabel = settings.useMockChannel ? "Demo mode" : activeProfile?.label ?? instanceHost(settings.zakuraBaseUrl);
+  const chooseTheme = (value: ThemePreference) => {
+    if (value === theme || !settingsReady) return;
+    applyTheme(value);
+    void updateSettings({ theme: value, onboardingComplete: settings.onboardingComplete })
+      .catch((cause: Error) => setError(cause.message));
+  };
+  const confirmSignOutNow = () => {
+    setConfirmSignOut(false);
+    setSaving(true);
+    void signOut().then(() => router.dismissTo("/")).catch((cause: Error) => setError(cause.message)).finally(() => setSaving(false));
+  };
   const input = "min-w-0 flex-1 py-2 text-right text-[16px] text-ink";
 
   return (
@@ -86,6 +116,26 @@ export default function SettingsScreen() {
             trackColor={{ false: "#444", true: "#fcfcfc" }} thumbColor={useMock ? "#070707" : "#fcfcfc"} />
         </Row>
       </Card>
+
+      {spaces.length > 0 ? <Card>
+        <Text className="px-4 pt-3 pb-1 text-[13px] text-ink-secondary">Space</Text>
+        {spaces.map((space, index) => {
+          const active = settings.spaceId ? settings.spaceId === space.id : space.slug === "default";
+          return <Pressable key={space.id} accessibilityRole="button" accessibilityLabel={`Switch to space ${space.name}`}
+            onPress={() => { void switchSpace(space).catch((cause: Error) => setError(cause.message)); }}
+            className="active:bg-raised/40">
+            <Row first={index === 0}>
+              <View className="min-w-0 flex-1">
+                <Text className="text-[17px] text-ink" numberOfLines={1}>{space.name}</Text>
+                <Text className="mt-0.5 text-[13px] text-ink-secondary" numberOfLines={1}>
+                  {space.agentCount} {space.agentCount === 1 ? "agent" : "agents"}
+                </Text>
+              </View>
+              {active ? <Check size={18} color="#fcfcfc" /> : <ChevronRight size={18} color={ICON} />}
+            </Row>
+          </Pressable>;
+        })}
+      </Card> : null}
 
       <Card>
         {profiles.map((profile, index) => {
@@ -125,12 +175,57 @@ export default function SettingsScreen() {
         </Row>
       </Card>
 
-      {settings.onboardingComplete ? <Card>
-        <Pressable accessibilityRole="button" accessibilityLabel="Sign out" disabled={saving} className="active:bg-raised/40"
-          onPress={() => { setSaving(true); void signOut().then(() => router.dismissTo("/")).catch((cause: Error) => setError(cause.message)).finally(() => setSaving(false)); }}>
-          <Row first><Text className="text-[17px] text-danger">Sign out</Text></Row>
+      <Text className="mb-2 px-4 text-[13px] text-ink-secondary">Appearance</Text>
+      <Card>
+        {THEMES.map((option, index) => {
+          const active = option.value === theme;
+          return <Pressable key={option.value} accessibilityRole="button" accessibilityLabel={`Theme: ${option.label}`}
+            disabled={!settingsReady} onPress={() => chooseTheme(option.value)} className="active:bg-raised/40">
+            <Row first={index === 0}>
+              <Text className="text-[17px] text-ink">{option.label}</Text>
+              {active ? <Check size={18} color="#fcfcfc" /> : null}
+            </Row>
+          </Pressable>;
+        })}
+      </Card>
+
+      <Card>
+        <Pressable accessibilityRole="button" accessibilityLabel="Plugins" onPress={() => setPluginsOpen(true)} className="active:bg-raised/40">
+          <Row first>
+            <Text className="text-[17px] text-ink">Plugins</Text>
+            <ChevronRight size={18} color={ICON} />
+          </Row>
         </Pressable>
-      </Card> : null}
+      </Card>
+
+      {settings.onboardingComplete ? <>
+        <Text className="mb-2 px-4 text-[13px] text-ink-secondary">Account</Text>
+        <Card>
+          <Row first>
+            <View className="min-w-0 flex-1">
+              <Text className="text-[17px] text-ink" numberOfLines={1}>{accountLabel}</Text>
+              <Text className="mt-0.5 text-[13px] text-ink-secondary" numberOfLines={1}>{settings.zakuraBaseUrl}</Text>
+            </View>
+          </Row>
+          <Pressable accessibilityRole="button" accessibilityLabel="Sign out" disabled={saving}
+            onPress={() => setConfirmSignOut(true)} className="active:bg-raised/40">
+            <Row><Text className="text-[17px] text-danger">Sign out</Text></Row>
+          </Pressable>
+        </Card>
+      </> : null}
+
+      <Card>
+        <Row first>
+          <Text className="text-[17px] text-ink">About</Text>
+          <Text className="text-[15px] text-ink-secondary">{version ? `Version ${version}` : "Zakura Bot"}</Text>
+        </Row>
+        <Pressable accessibilityRole="button" accessibilityLabel="Send feedback" onPress={() => setFeedbackOpen(true)} className="active:bg-raised/40">
+          <Row>
+            <Text className="text-[17px] text-ink">Send feedback</Text>
+            <ChevronRight size={18} color={ICON} />
+          </Row>
+        </Pressable>
+      </Card>
 
       {error || authNotice ? <View className="mb-4 px-4" accessibilityRole="alert" accessibilityLiveRegion="polite">
         <Text className="text-[13px] leading-5 text-danger">{error ?? authNotice}</Text>
@@ -153,8 +248,29 @@ export default function SettingsScreen() {
       <View className="mt-10 items-center gap-2">
         <View className="h-14 w-14 rounded-full bg-ink" />
         <Text className="mt-2 text-[20px] font-medium text-ink">Zakura Bot</Text>
-        {version ? <Text className="text-[13px] text-ink-secondary">{version}</Text> : null}
       </View>
+
+      <Modal visible={confirmSignOut} transparent animationType="fade" onRequestClose={() => setConfirmSignOut(false)} statusBarTranslucent>
+        <View className="flex-1 items-center justify-center bg-black/60 px-6" accessibilityViewIsModal>
+          <Pressable className="absolute inset-0" onPress={() => setConfirmSignOut(false)} accessibilityLabel="Cancel sign out" accessible={false} focusable={false} />
+          <View className="w-full max-w-sm rounded-3xl bg-panel p-5">
+            <Text className="text-[17px] font-medium text-ink">Sign out?</Text>
+            <Text className="mt-1 text-[14px] leading-5 text-ink-secondary">You'll need to sign in again.</Text>
+            <View className="mt-5 flex-row items-center justify-end gap-1">
+              <Pressable onPress={() => setConfirmSignOut(false)} accessibilityRole="button" accessibilityLabel="Cancel sign out"
+                className="min-h-11 items-center justify-center rounded-full px-4 active:bg-raised/40">
+                <Text className="text-[15px] text-ink-secondary">Cancel</Text>
+              </Pressable>
+              <Pressable onPress={confirmSignOutNow} accessibilityRole="button" accessibilityLabel="Confirm sign out"
+                className="min-h-11 items-center justify-center rounded-full px-4 active:bg-raised/40">
+                <Text className="text-[15px] font-semibold text-danger">Sign out</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      <FeedbackSheet visible={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
+      <PluginsModal visible={pluginsOpen} onClose={() => setPluginsOpen(false)} />
     </ScrollView>
   );
 }

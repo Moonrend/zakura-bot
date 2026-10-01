@@ -684,6 +684,15 @@ test("authorization, protocol and fatal server errors are terminal with useful e
   }
 });
 
+test("4401 close marks the connection event as an auth failure for the sign-in path", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets, events } = liveHarness();
+  await client.connect(); sockets[0].open(); sockets[0].remoteClose(4401);
+  const failure = events.find((event) => event.type === "connection" && event.authFailure === true);
+  assert.ok(failure && failure.type === "connection" && /Authentication failed/.test(failure.detail ?? ""));
+  client.disconnect();
+});
+
 test("unsupported versions are terminal even when their ready roster uses a different schema", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   for (const roster of [undefined, null, { a: { displayName: "Zakura", available: true } }]) {

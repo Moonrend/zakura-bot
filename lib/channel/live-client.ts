@@ -10,10 +10,11 @@
 import { version } from "../../package.json";
 import type { Agent, ChatMessage } from "../types";
 import { attachmentIdentity, fileMessageText } from "../files";
+import { zakuraRequest } from "../auth";
 import { attachmentReferences, channelCloseFailure, decodeServerFrame, InvalidChannelFrameError, isChannelId, PROTOCOL_VERSION, UnsupportedChannelProtocolError } from "./protocol";
 import {
   ChannelEmitter, MAX_MESSAGE_LENGTH, uid,
-  type ChannelConnectionState, type ChannelListener,
+  type ChannelConnectionState, type ChannelHistoryPage, type ChannelListener,
   type SendMessageInput, type ZakuraChannelClient,
 } from "./types";
 
@@ -142,9 +143,9 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
   getConnectionState(): ChannelConnectionState { return this.state; }
   subscribe(listener: ChannelListener): () => void { return this.emitter.subscribe(listener); }
 
-  private setState(state: ChannelConnectionState, detail?: string) {
+  private setState(state: ChannelConnectionState, detail?: string, authFailure = false) {
     this.state = state;
-    this.emitter.emit({ type: "connection", state, detail });
+    this.emitter.emit({ type: "connection", state, detail, ...(authFailure ? { authFailure: true } : {}) });
   }
 
   /** Idempotent; resolves after starting the connection, not authentication. */
@@ -222,7 +223,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     socket.onclose = (event) => {
       if (!current()) return;
       const failure = channelCloseFailure(event.code);
-      this.fail(failure.detail, failure.retry);
+      this.fail(failure.detail, failure.retry, failure.auth);
     };
   }
 
@@ -250,14 +251,14 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     if (!this.awaitClosingSocket(detail)) this.fail(detail, true);
   }
 
-  private fail(detail: string, retry: boolean) {
+  private fail(detail: string, retry: boolean, authFailure = false) {
     this.cancelReconnect();
     this.releaseSocket();
     if (!retry) {
       this.closedByUser = true;
       this.stopObservingNetwork();
     }
-    this.setState("error", detail);
+    this.setState("error", detail, authFailure);
     if (retry) this.scheduleReconnect();
   }
 
@@ -409,6 +410,10 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
         this.emitter.emit(frame);
         break;
       }
+      case "reaction":
+        // The wire frame carries no agent id; the store scopes it by message id.
+        this.emitter.emit({ type: "reaction", messageId: frame.messageId, emoji: frame.emoji, userId: frame.userId, op: frame.op });
+        break;
     }
   }
 
@@ -600,6 +605,31 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     this.cancelReconnect();
     this.releaseSocket();
     this.setState("disconnected");
+  }
+
+  /**
+   * REST history shares the WebSocket's base URL and credentials. Stored frames
+   * are the same wire frames decodeServerFrame already validates.
+   */
+  async fetchHistory(agentId: string, before?: number, limit?: number): Promise<ChannelHistoryPage> {
+    const token = this.opts.getToken ? await this.opts.getToken() : this.opts.token;
+    const query = new URLSearchParams();
+    if (limit !== undefined) query.set("limit", String(limit));
+    if (before !== undefined) query.set("before", String(before));
+    const suffix = query.toString();
+    const page = await zakuraRequest<{ items: { seq: number; frame: unknown }[]; nextBefore: number | null }>(
+      this.opts.baseUrl, `/api/zakurabot/agents/${encodeURIComponent(agentId)}/history${suffix ? `?${suffix}` : ""}`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    const messages: ChatMessage[] = [];
+    for (const item of page.items ?? []) {
+      try {
+        const frame = decodeServerFrame(JSON.stringify(item.frame));
+        if (frame?.type === "message" || frame?.type === "chat_reply") messages.push(frame.message);
+      } catch {
+        // One unreadable stored frame must not discard the rest of the page.
+      }
+    }
+    return { messages, nextBefore: page.nextBefore ?? null };
   }
 
   async sendMessage(input: SendMessageInput): Promise<void> {

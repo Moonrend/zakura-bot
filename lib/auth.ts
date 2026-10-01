@@ -78,19 +78,32 @@ export async function startOAuthLogin(baseUrl: string, clientId: string, redirec
 }
 
 /** 解析重定向回来的 URL（native openAuthSessionAsync 或 web 回调页）。 */
-export function codeFromRedirect(redirectUrl: string, expectedState?: string): string {
+export function codeFromRedirect(redirectUrl: string, expectedState?: string, serverBaseUrl?: string): string {
   let url: URL;
   try { url = new URL(redirectUrl); } catch { throw new Error("Zakura returned an invalid redirect."); }
-  const iss = url.searchParams.get("iss");
-  if (iss) {
-    try { if (new URL(iss).origin !== url.origin) throw new Error(); } catch { throw new Error("Zakura returned an invalid redirect issuer."); }
-  }
   const error = url.searchParams.get("error");
   if (error) throw new Error(error === "access_denied" ? "Authorization was declined. You can start again." : `Zakura authorization failed: ${error}.`);
+  const iss = url.searchParams.get("iss");
+  if (iss && (url.protocol === "http:" || url.protocol === "https:")) {
+    let issuerOrigin: string | undefined;
+    try { issuerOrigin = new URL(iss).origin; } catch { issuerOrigin = undefined; }
+    let expectedOrigin: string | undefined;
+    try { expectedOrigin = serverBaseUrl ? new URL(serverBaseUrl).origin : undefined; } catch { expectedOrigin = undefined; }
+    if (!issuerOrigin || !expectedOrigin || issuerOrigin !== expectedOrigin) throw new Error("Zakura returned an invalid redirect issuer.");
+  }
   if (expectedState && url.searchParams.get("state") !== expectedState) throw new Error("Zakura returned a mismatched login state.");
   const code = url.searchParams.get("code");
   if (!code) throw new Error("Zakura did not return an authorization code.");
   return code;
+}
+
+/** Same-tab callback guard: the URL state must match the pending login stored in this window. */
+export function validatePendingState(urlState: string | null, storedState: string | null): string | null {
+  if (!storedState) return "This sign-in attempt is no longer available. Start again.";
+  if (!urlState || urlState !== storedState) {
+    return "This sign-in link doesn't match this window. It may be stale or from another tab. Start again.";
+  }
+  return null;
 }
 
 export const exchangeOAuthCode = (baseUrl: string, input: { code: string; verifier: string; clientId: string; redirectUri: string },

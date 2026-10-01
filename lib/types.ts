@@ -86,6 +86,8 @@ export interface ChatMessage {
   serverId?: string;
   /** Socket writes are pending until the server echoes the user message. */
   pending?: boolean;
+  /** Held while the channel is offline; the store sends it after reconnecting. */
+  queued?: boolean;
   /** true while assistant tokens are still streaming in */
   streaming?: boolean;
   /** Set when the turn was interrupted before completion */
@@ -104,6 +106,11 @@ export interface Agent {
   preview?: string;
   bindingId?: string;
   description?: string;
+  spaceId?: string | null;
+  spaceName?: string | null;
+  avatarColor?: string | null;
+  avatarShape?: string | null;
+  avatarUrl?: string | null;
   capabilities?: { files: boolean; desktop: boolean; interactions: boolean };
 }
 
@@ -124,11 +131,18 @@ export interface AppSettings {
   useMockChannel: boolean;
   profileId?: string;
   onboardingComplete?: boolean;
+  /** 绑定的 Space；空 = 默认空间。旧服务端无 spaces 时忽略 */
+  spaceId?: string;
+  spaceName?: string;
+  theme?: ThemePreference;
 }
 
+export type ThemePreference = "system" | "light" | "dark";
+
 export const DEFAULT_SETTINGS: AppSettings = {
-  zakuraBaseUrl: "http://127.0.0.1:8787",
+  zakuraBaseUrl: "http://100.81.13.25:8787",
   authToken: "",
   useMockChannel: true,
   onboardingComplete: false,
+  theme: "system",
 };

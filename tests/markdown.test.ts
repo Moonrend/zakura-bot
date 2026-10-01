@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseInlineMarkdown, parseMarkdownBlocks } from "../lib/markdown";
+import { parseInlineMarkdown, parseMarkdown, parseMarkdownBlocks } from "../lib/markdown";
 
 test("escaped Markdown punctuation stays literal while code retains its original backslashes", () => {
   const literalLink = String.raw`\[Literal](https://example.com)`;
@@ -162,5 +162,50 @@ test("unmatched inline delimiters and incomplete link destinations remain visibl
   assert.deepEqual(parseInlineMarkdown(partial + ")"), [{ kind: "link", text: "Guide", url: "https://example.com/guide_(one)" }]);
   assert.deepEqual(parseInlineMarkdown("[unfinished](https://example.com/ then **bold**"), [
     { kind: "text", text: "[unfinished](https://example.com/ then " }, { kind: "strong", text: "bold" },
+  ]);
+});
+
+test("GFM pipe tables parse headers, rows and delimiter alignment", () => {
+  assert.deepEqual(parseMarkdown("| Name | Qty |\n| :--- | ---: |\n| Apple | 3 |\n| Pear | 12 |"), [
+    { type: "table", table: { headers: ["Name", "Qty"], rows: [["Apple", "3"], ["Pear", "12"]], align: ["left", "right"] } },
+  ]);
+  assert.deepEqual(parseMarkdown("Name | Qty\n:---: | ---\nApple | 3"), [
+    { type: "table", table: { headers: ["Name", "Qty"], rows: [["Apple", "3"]], align: ["center", undefined] } },
+  ]);
+  assert.deepEqual(parseMarkdown("Intro\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\nOutro"), [
+    { type: "text", text: "Intro\n" },
+    { type: "table", table: { headers: ["a", "b"], rows: [["1", "2"]], align: [undefined, undefined] } },
+    { type: "text", text: "Outro" },
+  ]);
+});
+
+test("tables without a valid delimiter row stay plain text", () => {
+  const incomplete = "| Name | Qty |\n| Apple | 3 |";
+  assert.deepEqual(parseMarkdown(incomplete), [{ type: "text", text: incomplete }]);
+  const mismatched = "| a | b |\n| --- |\n| 1 | 2 |";
+  assert.deepEqual(parseMarkdown(mismatched), [{ type: "text", text: mismatched }]);
+  assert.deepEqual(parseMarkdown("---"), [{ type: "text", text: "---" }]);
+});
+
+test("task lists parse checked state and stay separate from surrounding text", () => {
+  assert.deepEqual(parseMarkdown("- [ ] Write docs\n- [x] Ship it"), [
+    { type: "tasks", items: [{ checked: false, text: "Write docs" }, { checked: true, text: "Ship it" }] },
+  ]);
+  assert.deepEqual(parseMarkdown("Intro\n- [ ] one\n* [X] two\nOutro"), [
+    { type: "text", text: "Intro" },
+    { type: "tasks", items: [{ checked: false, text: "one" }, { checked: true, text: "two" }] },
+    { type: "text", text: "Outro" },
+  ]);
+  assert.deepEqual(parseMarkdown("- plain bullet"), [{ type: "text", text: "- plain bullet" }]);
+});
+
+test("fenced code keeps table and task syntax verbatim", () => {
+  assert.deepEqual(parseMarkdown("```js\n- [ ] todo\n| a | b |\n| --- | --- |\n```"), [
+    { type: "code", language: "js", text: "- [ ] todo\n| a | b |\n| --- | --- |" },
+  ]);
+  assert.deepEqual(parseMarkdown("Before\n```\ncode\n```\nAfter"), [
+    { type: "text", text: "Before" },
+    { type: "code", text: "code" },
+    { type: "text", text: "After" },
   ]);
 });

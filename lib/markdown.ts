@@ -2,6 +2,14 @@ export type MarkdownBlock = { code: boolean; text: string; language?: string };
 export type MarkdownSpan =
   | { kind: "text" | "literal" | "strong" | "code"; text: string }
   | { kind: "link"; text: string; url: string };
+export type MarkdownAlign = "left" | "center" | "right";
+export type MarkdownTable = { headers: string[]; rows: string[][]; align: Array<MarkdownAlign | undefined> };
+export type MarkdownTask = { checked: boolean; text: string };
+export type MarkdownNode =
+  | { type: "text"; text: string }
+  | { type: "code"; text: string; language?: string }
+  | { type: "table"; table: MarkdownTable }
+  | { type: "tasks"; items: MarkdownTask[] };
 
 // CommonMark escapes ASCII punctuation, not letters in paths such as C:\work.
 function unescapeMarkdown(text: string): string {
@@ -129,4 +137,99 @@ function parseInlineParagraph(line: string, streaming: boolean): MarkdownSpan[] 
   }
   if (offset < line.length || spans.length === 0) spans.push({ kind: "text", text: line.slice(offset) });
   return spans;
+}
+
+const taskLine = /^ {0,3}[-*+] \[([ xX])\](?:[ \t]+(.*))?$/;
+const delimiterCell = /^:?-+:?$/;
+
+function splitTableRow(line: string): string[] {
+  let value = line.trim();
+  if (value.startsWith("|")) value = value.slice(1);
+  if (value.endsWith("|")) value = value.slice(0, -1);
+  const cells: string[] = [];
+  let current = "";
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index];
+    if (character === "\\" && value[index + 1] === "|") { current += character + "|"; index += 1; continue; }
+    if (character === "|") { cells.push(current.trim()); current = ""; continue; }
+    current += character;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function tableAlignments(line: string): Array<MarkdownAlign | undefined> | null {
+  const cells = splitTableRow(line);
+  if (!cells.length || !cells.every((cell) => delimiterCell.test(cell))) return null;
+  return cells.map((cell) => {
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    if (left && right) return "center";
+    if (right) return "right";
+    if (left) return "left";
+    return undefined;
+  });
+}
+
+function tableAt(lines: string[], start: number): { table: MarkdownTable; end: number } | null {
+  const header = lines[start];
+  if (!header || !header.includes("|")) return null;
+  const align = tableAlignments(lines[start + 1] ?? "");
+  if (!align) return null;
+  const headers = splitTableRow(header);
+  if (headers.length === 0 || headers.length !== align.length) return null;
+  const rows: string[][] = [];
+  let index = start + 2;
+  for (; index < lines.length && lines[index].includes("|"); index++) {
+    const cells = splitTableRow(lines[index]);
+    rows.push(headers.map((_, column) => cells[column] ?? ""));
+  }
+  return { table: { headers, rows, align }, end: index };
+}
+
+function parseTextBlock(text: string): MarkdownNode[] {
+  const lines = text.split("\n");
+  const nodes: MarkdownNode[] = [];
+  let paragraph: string[] = [];
+  const flush = () => {
+    if (paragraph.length) nodes.push({ type: "text", text: paragraph.join("\n") });
+    paragraph = [];
+  };
+  for (let index = 0; index < lines.length;) {
+    const task = taskLine.exec(lines[index]);
+    if (task) {
+      flush();
+      const items: MarkdownTask[] = [];
+      for (; index < lines.length; index++) {
+        const match = taskLine.exec(lines[index]);
+        if (!match) break;
+        items.push({ checked: match[1].toLowerCase() === "x", text: match[2] ?? "" });
+      }
+      nodes.push({ type: "tasks", items });
+      continue;
+    }
+    const table = tableAt(lines, index);
+    if (table) {
+      flush();
+      nodes.push({ type: "table", table: table.table });
+      index = table.end;
+      continue;
+    }
+    paragraph.push(lines[index]);
+    index += 1;
+  }
+  flush();
+  return nodes;
+}
+
+export function parseMarkdown(text: string): MarkdownNode[] {
+  const nodes: MarkdownNode[] = [];
+  for (const block of parseMarkdownBlocks(text)) {
+    if (block.code) {
+      nodes.push(block.language ? { type: "code", text: block.text, language: block.language } : { type: "code", text: block.text });
+      continue;
+    }
+    nodes.push(...parseTextBlock(block.text));
+  }
+  return nodes;
 }
