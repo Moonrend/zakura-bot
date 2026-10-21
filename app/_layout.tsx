@@ -39,7 +39,8 @@ function ThemedRoot({ webViewportHeight }: { webViewportHeight?: number }) {
   const { settings } = useStore();
   const systemScheme = useColorScheme();
   const scheme = resolveTheme(settings.theme, systemScheme);
-  const themeStyle = useMemo(() => vars(themeVariables(scheme)), [scheme]);
+  // Web inherits the live root variables; inline SSR variables would mask them.
+  const themeStyle = useMemo(() => Platform.OS === "web" ? undefined : vars(themeVariables(scheme)), [scheme]);
   useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
     const root = document.documentElement;

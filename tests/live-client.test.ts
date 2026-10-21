@@ -421,6 +421,39 @@ test("correlated turn failures settle delivered replies without replaying old fa
   assert.equal(events.at(-1)?.type, "error", "older backfill cannot hide the latest user's terminal error");
 });
 
+test("Stop acknowledgement leaves the next queued reply running", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { client, sockets } = liveHarness({ interruptTimeoutMs: 100 });
+  let state = emptyChatState();
+  client.subscribe((event) => { state = chatReducer(state, event); });
+  t.after(() => client.disconnect());
+  await client.connect(); const socket = sockets[0]; socket.open(); socket.ready();
+  socket.frame({ type: "typing", agentId: "a", active: true });
+  await client.interrupt("a");
+  assert.equal(state.interrupting.a, true);
+  socket.frame({ type: "chat_reply", agentId: "a", messageId: "next", createdAt: 1,
+    streaming: true, payload: { text: "Next reply" } });
+  const firstRequest = socket.sent.at(-1)!.requestId;
+  socket.frame({ type: "interrupt_ack", agentId: "a", requestId: firstRequest });
+  assert.equal(state.interrupting.a, false);
+  assert.equal(isAgentWorking(state, "a"), true);
+  assert.equal(state.messagesByAgent.a[0].streaming, true);
+  socket.frame({ type: "message_delta", agentId: "a", messageId: "next", delta: " continues" });
+  assert.equal(state.messagesByAgent.a[0].text, "Next reply continues");
+  await client.interrupt("a");
+  const secondRequest = socket.sent.at(-1)!.requestId;
+  assert.notEqual(secondRequest, firstRequest);
+  socket.frame({ type: "interrupt_ack", agentId: "a", requestId: firstRequest });
+  assert.equal(state.interrupting.a, true, "a delayed acknowledgement cannot settle the next Stop");
+  socket.frame({ type: "interrupt_ack", agentId: "a", requestId: secondRequest });
+  assert.equal(state.interrupting.a, false);
+  t.mock.timers.tick(100);
+  assert.deepEqual(state.errors, []);
+  socket.frame({ type: "typing", agentId: "a", active: false });
+  assert.equal(isAgentWorking(state, "a"), false);
+  assert.throws(() => decodeServerFrame(JSON.stringify({ type: "interrupt_ack" })));
+});
+
 test("turn-ending errors require an agent while ordinary v1 errors remain operational", () => {
   assert.throws(() => decodeServerFrame(JSON.stringify({ type: "error", message: "Run failed", turnEnded: true })));
   assert.deepEqual(decodeServerFrame(JSON.stringify({ type: "error", message: "Temporary channel issue" })), {

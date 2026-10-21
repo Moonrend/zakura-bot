@@ -8,6 +8,8 @@ User reference screenshots: `docs/ux-grokbot-reference/*.jpg` (2026-09-17).
 3. **Tools are invisible.** Never show tool name, args, stdout, or expandable detail. At most a tiny pill while running: `Searching…` / `Running code…` (generic verbs). When done, the pill disappears; only the final answer remains.
 4. **Approvals stay quiet.** Needed approvals are short cards (title + approve/deny), not essays. Prefer the same sparse Grok Bot feel.
 5. **Capability without clutter.** Desktop, files, bots, groups exist via icons/menus, not banners.
+6. **Server-owned continuity.** Sending starts the conversation automatically. Context compaction and queued turns stay on the server; there are no session-maintenance controls.
+7. **Direct settings.** Accounts, spaces and appearance are immediately actionable. No token editor, global Save button or duplicate bot-details action.
 
 ## Rendering contract
 - One temporary pill per conversation, even when tools run in parallel. Search tools use `Searching…`, code/shell tools use `Running code…`, all others use `Working…`.

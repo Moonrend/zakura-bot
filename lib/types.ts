@@ -114,14 +114,6 @@ export interface Agent {
   capabilities?: { files: boolean; desktop: boolean; interactions: boolean };
 }
 
-export interface BotSession {
-  agentId: string;
-  bindingId?: string;
-  sessionId: string | null;
-  status: "not_started" | "ready" | "busy";
-  title?: string | null;
-}
-
 export type ChannelMode = "mock" | "live";
 
 export interface AppSettings {

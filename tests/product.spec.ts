@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import { createHash } from "node:crypto";
 
 test("groups retain names, order and bot membership after reload", async ({ page }) => {
   await page.goto("/");
@@ -32,34 +31,37 @@ test("groups retain names, order and bot membership after reload", async ({ page
   await expect(groups.last().getByRole("button", { name: /^Research[.,]/ })).toBeVisible();
 });
 
-test("bot manager shows binding details and starts, stops and resets a server session", async ({ page }) => {
+test("bot conversations send directly without client session maintenance", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("zakura-bot.settings.v1", JSON.stringify({
     zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-token", useMockChannel: false,
   })));
   const actions: string[] = [];
-  await page.route("**/api/zakurabot/sessions/bot", (route) => {
-    const action = route.request().method() === "POST" ? route.request().postDataJSON().action : "status";
-    actions.push(action);
-    return route.fulfill({ json: { session: { agentId: "bot", bindingId: "binding-123", sessionId: "session", status: action === "status" ? "not_started" : "ready" } } });
+  await page.route("**/api/zakurabot/sessions/**", (route) => {
+    actions.push(route.request().method());
+    return route.fulfill({ json: {} });
   });
   await page.routeWebSocket("**/api/zakurabot/ws", (socket) => socket.onMessage((raw) => {
-    if (JSON.parse(String(raw)).type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [
-      { id: "bot", name: "Research", title: "Briefs", description: "Your research assistant", bindingId: "binding-123", status: "idle" },
+    const frame = JSON.parse(String(raw));
+    if (frame.type === "hello") socket.send(JSON.stringify({ type: "ready", protocol: 1, agents: [
+      { id: "bot", name: "Research", description: "Your research assistant", bindingId: "binding-123", status: "idle" },
     ] }));
+    if (frame.type === "send") {
+      socket.send(JSON.stringify({ type: "message", message: { id: frame.clientMessageId, clientMessageId: frame.clientMessageId,
+        agentId: "bot", role: "user", kind: "text", text: frame.text, createdAt: Date.now() } }));
+      socket.send(JSON.stringify({ type: "chat_reply", agentId: "bot", messageId: "reply", createdAt: Date.now(), payload: { text: "Ready to help" } }));
+      socket.send(JSON.stringify({ type: "typing", agentId: "bot", active: false }));
+    }
   }));
   await page.goto("/");
   await page.getByRole("button", { name: "Manage bots", exact: true }).click();
   await expect(page.getByText("Your research assistant", { exact: true })).toBeVisible();
-  await expect(page.getByText("Binding: binding-123", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Start session", exact: true }).click();
-  await expect(page.getByText("Session: ready", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Stop session", exact: true }).click();
-  await expect(page.getByText("The current run has stopped. You can send a message to continue.", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "New session", exact: true }).click();
-  await expect(page.getByText("New session ready. The bot starts with a fresh context.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Binding: binding-123", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^(Start|Stop|New) session$/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Open bot conversation", exact: true }).click();
-  await expect(page.getByText("New session started. Your bot now has a fresh context.", { exact: true })).toBeVisible();
-  expect(actions).toEqual(["status", "start", "stop", "new"]);
+  await page.getByRole("textbox", { name: "Message Research", exact: true }).fill("hello");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.getByTestId("message-reply")).toContainText("Ready to help");
+  expect(actions).toEqual([]);
 });
 
 test("signed-in accounts create, edit and delete agents from the bot manager", async ({ page }) => {
@@ -73,7 +75,7 @@ test("signed-in accounts create, edit and delete agents from the bot manager", a
     session: { agentId: "scout", bindingId: "auto-binding", sessionId: null, status: "not_started" } } }));
   await page.route("**/api/agents", async (route) => {
     if (route.request().method() === "POST") {
-      expect(route.request().postDataJSON()).toMatchObject({ name: "Scout", enableComputer: true });
+      expect(route.request().postDataJSON()).toMatchObject({ name: "Scout", createApiKey: false });
       socket?.send(JSON.stringify({ type: "agents", agents }));
       return route.fulfill({ status: 201, json: { id: "scout", name: "Scout", slug: "scout", description: "Scans the news", enableComputer: true, enableMemory: false } });
     }
@@ -102,20 +104,19 @@ test("signed-in accounts create, edit and delete agents from the bot manager", a
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Manage bots", exact: true }).click();
-  await expect(page.getByText("No agents yet. Create one below.", { exact: true })).toBeVisible();
+  await expect(page.getByText("No bots yet", { exact: true }).last()).toBeVisible();
+  await page.getByRole("button", { name: "New agent", exact: true }).click();
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill("Scout");
+  await page.getByRole("textbox", { name: "Description", exact: true }).fill("Scans the news");
   await page.getByRole("button", { name: "Create agent", exact: true }).click();
-  await page.getByRole("textbox", { name: "Agent name", exact: true }).fill("Scout");
-  await page.getByRole("textbox", { name: "Agent description", exact: true }).fill("Scans the news");
-  await page.getByRole("button", { name: "Toggle computer environment", exact: true }).click();
-  await page.getByRole("button", { name: "Create agent", exact: true }).click();
-  await expect(page.getByText("Scout is ready. Open its conversation to start talking.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Message Scout", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Manage bots", exact: true }).click();
   await page.getByRole("button", { name: "Manage Scout", exact: true }).click();
-  await expect(page.getByText("Session: not started", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Edit agent", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Agent name", exact: true })).toHaveValue("Scout");
-  await page.getByRole("textbox", { name: "Agent name", exact: true }).fill("Scout Prime");
-  await page.getByRole("button", { name: "Save agent", exact: true }).click();
-  await expect(page.getByText("Agent saved. The roster updates in a moment.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Scout");
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill("Scout Prime");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Manage Scout Prime", exact: true }).click();
   await page.getByRole("button", { name: "Delete agent", exact: true }).click();
   await page.getByRole("button", { name: "Confirm delete agent", exact: true }).click();
@@ -134,7 +135,7 @@ test("first launch signs in through Zakura's OAuth, persists only metadata local
     expect(input.grant_types).toContain("authorization_code");
     return route.fulfill({ status: 201, json: { client_id: `client-${identity}` } });
   });
-  await page.route("**/authorize**", async (route) => {
+  await context.route("**/authorize**", async (route) => {
     const url = new URL(route.request().url());
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
@@ -144,7 +145,7 @@ test("first launch signs in through Zakura's OAuth, persists only metadata local
     const origin = url.origin;
     return route.fulfill({ contentType: "text/html", body: `<script>location.replace('/oauth/callback?code=${code}&state=${encodeURIComponent(state)}&iss=${encodeURIComponent(origin)}');</script>` });
   });
-  await page.route("**/token", async (route) => {
+  await page.route("**/token{,/revoke}", async (route) => {
     const input = route.request().postDataJSON() as Record<string, string>;
     if (route.request().url().includes("/token/revoke")) {
       revoked.push(input.token);
@@ -173,6 +174,7 @@ test("first launch signs in through Zakura's OAuth, persists only metadata local
   await expect(page.getByRole("textbox", { name: /Message Bot/ })).toBeVisible();
   await page.getByRole("button", { name: "Open settings", exact: true }).click();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm sign out", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Connect to Zakura" })).toBeVisible();
   expect(revoked).toEqual(["refresh-1"]);
   expect(await page.evaluate(() => JSON.stringify(sessionStorage))).not.toContain("refresh-1");

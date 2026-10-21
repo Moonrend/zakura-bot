@@ -103,7 +103,7 @@ type PendingWrite = { agentId: string; text: string; timer: Timer };
 type SentMessage = { agentId: string; text: string; attachments?: ChatMessage["attachments"]; createdAt: number; echo?: ChatMessage };
 type ReceiptAlias = { agentId: string; clientMessageId: string };
 type OutputIdentity = Pick<ChatMessage, "agentId" | "role" | "kind">;
-type PendingInterrupt = { timer: Timer | null };
+type PendingInterrupt = { timer: Timer | null; requestId: string };
 
 export class LiveZakuraChannelClient implements ZakuraChannelClient {
   readonly label = "Live WS";
@@ -391,6 +391,13 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
         if (message) this.emitter.emit({ type: "message", message });
         break;
       }
+      case "interrupt_ack":
+        // A queued reply may already be active. Acknowledging Stop only clears
+        // the request; typing remains authoritative for the conversation.
+        if (!frame.requestId || this.interrupts.get(frame.agentId)?.requestId === frame.requestId) {
+          this.finishInterrupt(frame.agentId);
+        }
+        break;
       case "typing":
         if (frame.active && this.roster.get(frame.agentId) === "offline") return;
         if (frame.active) this.liveTyping.add(frame.agentId);
@@ -681,7 +688,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     // Closing sockets must still take the normal close-code preservation path.
     if (socket?.readyState === 1 && this.roster.get(agentId) !== "busy" && !this.hasLiveWork(agentId)) return;
     if (this.interrupts.get(agentId)?.timer) return;
-    const pending = { timer: null as Timer | null };
+    const pending = { timer: null as Timer | null, requestId: uid("stop") };
     pending.timer = setTimeout(() => {
       if (this.interrupts.get(agentId) !== pending) return;
       if (this.awaitClosingSocket("Connection lost. Reconnecting…")) return;
@@ -699,7 +706,7 @@ export class LiveZakuraChannelClient implements ZakuraChannelClient {
     // A subscriber may observe turn completion or roster revocation before
     // this write. Never let that cancelled request reach a replacement turn.
     if (this.interrupts.get(agentId) !== pending) return;
-    if (!this.sendFrame({ type: "interrupt", agentId })) {
+    if (!this.sendFrame({ type: "interrupt", agentId, requestId: pending.requestId })) {
       this.failSocket("Connection lost. Reconnecting…");
       throw new Error("Could not stop the reply. Check the channel connection.");
     }

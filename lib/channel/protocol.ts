@@ -43,6 +43,7 @@ export type ServerFrame =
   | Extract<ChannelEvent, { type: "agents" | "message" | "message_delta" | "message_done" | "tool_activity" | "typing" }>
   | (Extract<ChannelEvent, { type: "error" }> & { fatal?: boolean })
   | { type: "reaction"; messageId: string; emoji: string; userId: string; op: "add" | "remove"; at: number }
+  | { type: "interrupt_ack"; agentId: string; requestId?: string }
   | { type: "pong" };
 
 type RecordValue = Record<string, unknown>;
@@ -353,6 +354,9 @@ function decodeFrame(frame: RecordValue): ServerFrame | null {
     case "message_done":
       requireValid(id(frame.agentId) && id(frame.messageId) && optionalBool(frame.interrupted));
       return { type: "message_done", agentId: frame.agentId, messageId: frame.messageId, interrupted: frame.interrupted };
+    case "interrupt_ack":
+      requireValid(id(frame.agentId) && (frame.requestId === undefined || id(frame.requestId)));
+      return { type: "interrupt_ack", agentId: frame.agentId, requestId: frame.requestId };
     case "typing":
       requireValid(id(frame.agentId) && typeof frame.active === "boolean");
       return { type: "typing", agentId: frame.agentId, active: frame.active };

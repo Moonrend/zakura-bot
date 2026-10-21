@@ -256,24 +256,23 @@ function mockReplyFor(userText: string, slow: boolean): string {
   const t = userText.trim().toLowerCase();
   if (slow) {
     return (
-      "这是一条较长的模拟回复，用来测试 Stop 按钮与流式渲染。" +
-      "Zakura 远程会话里，agent 每次对用户可见的输出都必须调用 `chat_reply`；" +
-      "本客户端只把 chat_reply 渲染为气泡，运行中最多显示 Working…，不会展开工具名或详情。" +
-      "你可以随时点击右侧的停止按钮中断本轮回复。" +
+      "周末可以从一条安静的街道开始。找家咖啡店坐一会儿，带上想读的书，不必排满行程。" +
+      "下午沿河散步，挑一家没去过的小店，或者约朋友一起做晚饭。" +
+      "如果天气不好，就留在家里听音乐，整理照片，让这一天慢下来。" +
       "\n\nThe stream will keep going for a few more seconds so you can try interrupting it. " +
       "Interrupted replies keep the text received so far and are marked as stopped."
     );
   }
   if (/\b(hello|hi|hey)\b/.test(t) || t.includes("你好")) {
-    return "你好！现在是演示模式。你可以发送消息、切换对话，或在 Settings 连接你的 Zakura Agent。";
+    return "你好！有什么想聊的？";
   }
   if (t.includes("settings") || t.includes("设置")) {
-    return "先在 Zakura 给 Agent 添加 Zakura Bot 绑定并创建设备。再打开左下角 Settings，填写设备的 Base URL 与 Token，关闭「Use mock channel」。没有配置服务器时，可以继续使用演示模式。";
+    return "打开 Settings，选择 Add account，登录你的 Zakura 账户。";
   }
   if (t.includes("help") || t.includes("帮助")) {
     return "试试这些：\n• 发送包含 “slow” 的消息 → 长流式回复，测试 Stop\n• 发送包含 “fail” 的消息 → 错误横幅（不展示工具名）\n• 切换 agent 看未读小点与预览更新";
   }
-  return `收到：「${userText.slice(0, 200)}」\n\n这是 mock 流式回复。真正绑定后，Zakura 会在远程会话里调用 \`chat_reply\`，把可见消息推送到本客户端。`;
+  return `收到：「${userText.slice(0, 200)}」\n\n登录 Zakura 后，就可以和你的 bot 聊天。`;
 }
 
 export function createDemoMessages(agentId: string): ChatMessage[] {
@@ -284,7 +283,7 @@ export function createDemoMessages(agentId: string): ChatMessage[] {
       agentId,
       role: "assistant",
       kind: "text",
-      text: "Welcome to Zakura Bot. Your agents and conversations, in one place.",
+      text: "Hi! What would you like to work on?",
       createdAt: now - 120_000,
     },
     {
@@ -300,7 +299,7 @@ export function createDemoMessages(agentId: string): ChatMessage[] {
       agentId,
       role: "assistant",
       kind: "text",
-      text: "You're in **demo mode**. Try a conversation, switch between agents, and watch replies arrive. Visible answers always come from `chat_reply` — never from raw model text. Configure a live connection in Settings when ready.",
+      text: "Try sending a message. This conversation is a demo.",
       createdAt: now - 80_000,
     },
     {
@@ -316,7 +315,7 @@ export function createDemoMessages(agentId: string): ChatMessage[] {
       agentId,
       role: "assistant",
       kind: "text",
-      text: "Send a message below to try a streaming reply. Include **slow** to try Stop, or **fail** to see how errors appear. While working you may briefly see Working… — no tool names or expandable details.",
+      text: "Replies appear as they're written. You can stop them at any time.",
       createdAt: now - 30_000,
     },
   ];
