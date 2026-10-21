@@ -127,7 +127,7 @@ function AvatarEditor({ agent, editable, commit }: {
     </View> : null}
     {tab === "bot" || Platform.OS !== "web" ? <View className="px-4 pb-4 pt-1">
       {agent.avatarUrl ? <Text className="pb-3 text-[13px] leading-5 text-ink-secondary">
-        A linked image is showing instead of this. Paste a new link in Upload to replace it.
+        Using a linked image.
       </Text> : null}
       <View className="flex-row flex-wrap gap-2">
         {AVATAR_SHAPES.map((option) => {
@@ -153,9 +153,6 @@ function AvatarEditor({ agent, editable, commit }: {
         {saveButton("Save avatar", saving || !botDirty, () => void saveBot())}
       </View> : null}
     </View> : <View className="px-4 pb-4 pt-1">
-      <Text className="text-[13px] leading-5 text-ink-secondary">
-        Zakura keeps uploaded files private to this app, so they can't load as an avatar. Paste a public image link instead.
-      </Text>
       <View className="mt-3">
         <Field label="Image URL" value={url} onChangeText={setUrl} editable={editable}
           placeholder="https://example.com/avatar.png" autoCapitalize="none" autoCorrect={false}

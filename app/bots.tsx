@@ -13,10 +13,9 @@ import { avatarFields } from "@/lib/avatar";
 const CIRCLE = "h-11 w-11 items-center justify-center rounded-full bg-raised active:bg-raised-hover";
 const SMALL = "h-9 w-9 items-center justify-center rounded-full active:bg-raised-hover";
 const ICON = "#d4d4d4";
-const ACTIONS = { start: "Start session", stop: "Stop session", new: "New session" } as const;
 
 export default function BotsScreen() {
-  const { agents, selectedId, selectAgent, sessions, sessionAction, reconnect, connection,
+  const { agents, selectedId, selectAgent, reconnect,
     canManage, deleteAgent, settings, hiddenBots } = useStore();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -31,23 +30,8 @@ export default function BotsScreen() {
   const selected = agents.find((row) => row.id === selectedId);
   const visibleAgents = agents.filter((agent) => !hiddenBots.includes(agent.id));
   useEffect(() => {
-    if (!selectedId) return;
-    let cancelled = false;
-    void sessionAction(selectedId, "status").catch((cause: Error) => { if (!cancelled) setError(cause.message); });
-    return () => { cancelled = true; };
-  }, [selectedId, sessionAction]);
-  useEffect(() => {
-    setEditing(false); setCreating(false); setConfirmingDelete(false);
+    setEditing(false); setConfirmingDelete(false);
   }, [selectedId]);
-  async function operate(action: keyof typeof ACTIONS) {
-    if (!selected || pending) return;
-    setPending(action); setError(null); setNotice(null);
-    try {
-      await sessionAction(selected.id, action);
-      setNotice(action === "stop" ? "The current run has stopped. You can send a message to continue." : action === "new" ? "New session ready. The bot starts with a fresh context." : "Session ready. Open the conversation to send a message.");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update this session."); }
-    finally { setPending(null); }
-  }
   function startEdit() {
     if (!selected) return;
     setError(null); setNotice(null); setEditing(true);
@@ -66,20 +50,17 @@ export default function BotsScreen() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not delete this agent."); }
     finally { setPending(null); setConfirmingDelete(false); }
   }
-  const capabilities = selected?.capabilities
-    ? [selected.capabilities.files && "Files", selected.capabilities.desktop && "Desktop", selected.capabilities.interactions && "Questions & approvals"].filter(Boolean).join(" · ") : "";
   return <ScrollView className="flex-1 bg-app" keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 16, paddingTop: Math.max(insets.top, 12), paddingBottom: Math.max(insets.bottom, 24), maxWidth: 680, width: "100%", alignSelf: "center" }}>
     <View className="mb-4 flex-row items-center justify-between">
       <Pressable accessibilityRole="button" accessibilityLabel="Close bot manager" onPress={() => router.dismissTo("/")} className={CIRCLE}><X size={20} color={ICON} /></Pressable>
       <View className="flex-row gap-2">
         <Pressable accessibilityRole="button" accessibilityLabel="Refresh bots" onPress={() => { void reconnect(); }} className={CIRCLE}><RefreshCw size={18} color={ICON} /></Pressable>
         {settings.spaceId ? <Pressable accessibilityRole="button" accessibilityLabel="Open org chart" onPress={() => router.push("/org-chart")} className={CIRCLE}><Network size={20} color={ICON} /></Pressable> : null}
-        {canManage ? <Pressable accessibilityRole="button" accessibilityLabel="New agent" onPress={startCreate} className={CIRCLE}><Plus size={22} color={ICON} /></Pressable> : null}
       </View>
     </View>
     <Text accessibilityRole="header" className="mb-2 px-4 text-[13px] text-ink-secondary">{settings.spaceName ? `Bots · ${settings.spaceName}` : "Bots"}</Text>
     <View className="mb-4 overflow-hidden rounded-3xl bg-panel">
-      {!visibleAgents.length ? <Text className="px-4 py-5 text-[15px] text-ink-secondary">{canManage ? "No agents yet. Create one below." : "No bots yet"}</Text> : null}
+      {!visibleAgents.length ? <Text className="px-4 py-5 text-[15px] text-ink-secondary">No bots yet</Text> : null}
       {groupAgentsBySpace(visibleAgents).map((section, sectionIndex) => <View key={section.id || "default"}>
         {agents.some((agent) => agent.spaceName) ? <Text accessibilityRole="header"
           className={cn("px-4 pb-1 pt-3 text-[13px] text-ink-secondary", sectionIndex > 0 && "border-t border-hairline")}
@@ -108,19 +89,9 @@ export default function BotsScreen() {
         {editing ? <View className="p-4">
           <AgentForm key={selected.id} agent={{ id: selected.id, name: selected.name, description: selected.description ?? "" }}
             onCancel={() => setEditing(false)}
-            onSaved={() => { setEditing(false); setNotice("Agent saved. The roster updates in a moment."); }} />
+            onSaved={() => { setEditing(false); setNotice("Saved"); }} />
         </View> : <>
           {selected.description || selected.title ? <Text className="px-4 pt-4 text-[15px] leading-6 text-ink">{selected.description || selected.title}</Text> : null}
-          <Text selectable className="px-4 pt-3 text-[13px] text-ink-secondary">Binding: {selected.bindingId ?? sessions[selected.id]?.bindingId ?? "Provided by Zakura"}</Text>
-          {capabilities ? <Text className="px-4 pt-1 text-[13px] text-ink-secondary">{capabilities}</Text> : null}
-          <Text className="px-4 pb-4 pt-3 text-[15px] text-ink">Session: {sessions[selected.id]?.status?.replace("_", " ") ?? "Loading…"}</Text>
-          {(Object.keys(ACTIONS) as Array<keyof typeof ACTIONS>).map((action) => <Pressable key={action} disabled={!!pending || connection !== "connected" || selected.status === "offline"}
-            accessibilityRole="button" accessibilityLabel={ACTIONS[action]} onPress={() => void operate(action)} className="active:bg-raised/40">
-            <View className="mx-4 min-h-14 flex-row items-center justify-between border-t border-hairline py-3">
-              <Text className="text-[17px] text-ink">{ACTIONS[action]}</Text>
-              {pending === action ? <ActivityIndicator size="small" color="#b3b3b3" /> : <ChevronRight size={18} color="#8a8a8a" />}
-            </View>
-          </Pressable>)}
           {canManage ? <>
             <Pressable accessibilityRole="button" accessibilityLabel="Edit agent" onPress={startEdit} className="active:bg-raised/40">
               <View className="mx-4 min-h-14 flex-row items-center justify-between border-t border-hairline py-3">
@@ -153,7 +124,7 @@ export default function BotsScreen() {
           </View>
           <View className="px-4 pb-4 pt-3">
             {creating ? <AgentForm onCancel={() => setCreating(false)}
-              onSaved={(agent) => { selectAgent(agent.id); setCreating(false); setNotice(`${agent.name} is ready. Open its conversation to start talking.`); }} /> : null}
+              onSaved={(agent) => { selectAgent(agent.id); setCreating(false); router.dismissTo("/"); }} /> : null}
           </View>
         </View>
       </View>

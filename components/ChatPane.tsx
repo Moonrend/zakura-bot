@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
-import { ArrowDown, ChevronLeft, Info, MessageCircle, Search, Settings, Monitor } from "lucide-react-native";
+import { ArrowDown, ChevronLeft, MessageCircle, Search, Settings, Monitor } from "lucide-react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlobAvatar } from "./BlobAvatar";
@@ -379,7 +379,7 @@ export function ChatPane({ agentListButtonRef, onOpenInfo }: { agentListButtonRe
         {compact ? <Pressable ref={agentListButtonRef} onPress={() => setSidebarOpen(true)} className={CIRCLE}
           accessibilityRole="button" accessibilityLabel="Open agent list"><ChevronLeft size={24} color={ICON} /></Pressable> : null}
         <View className={cn("min-w-0 flex-1 flex-row", compact ? "justify-center" : "justify-start")}>
-          {agent ? <Pressable onPress={() => router.push("/bots")} accessibilityRole="button" accessibilityLabel="Bot details"
+          {agent ? <Pressable onPress={() => compact ? router.push({ pathname: "/agent-info", params: { agentId: agent.id } }) : onOpenInfo?.()} accessibilityRole="button" accessibilityLabel="Bot details"
             className="min-h-11 max-w-full flex-row items-center gap-2.5 rounded-full bg-raised py-1 pl-1 pr-4 active:bg-raised-hover">
             <BlobAvatar name={agent.name} size={36} {...avatarFields(agent)} />
             <Text className="min-w-0 shrink text-[17px] font-medium text-ink" numberOfLines={1}>{agent.name}</Text>
@@ -391,11 +391,8 @@ export function ChatPane({ agentListButtonRef, onOpenInfo }: { agentListButtonRe
         {agent ? <View className="flex-row items-center gap-2">
           {Platform.OS !== "web" ? <Pressable onPress={() => setFindOpen(true)} accessibilityRole="button"
             accessibilityLabel="Find in chat" className={CIRCLE}><Search size={20} color={ICON} /></Pressable> : null}
-          {compact || onOpenInfo ? <Pressable onPress={() => compact
-            ? router.push({ pathname: "/agent-info", params: { agentId: agent.id } }) : onOpenInfo?.()}
-            accessibilityRole="button" accessibilityLabel="Agent info" className={CIRCLE}><Info size={20} color={ICON} /></Pressable> : null}
-          <Pressable onPress={() => router.push({ pathname: "/desktop", params: { agentId: agent.id } })} accessibilityRole="button" accessibilityLabel="View bot desktop"
-            className={CIRCLE}><Monitor size={20} color={ICON} /></Pressable>
+          {agent.capabilities?.desktop !== false ? <Pressable onPress={() => router.push({ pathname: "/desktop", params: { agentId: agent.id } })} accessibilityRole="button" accessibilityLabel="View bot desktop"
+            className={CIRCLE}><Monitor size={20} color={ICON} /></Pressable> : null}
         </View> : compact ? <View className="h-11 w-11" /> : null}
       </View>
 

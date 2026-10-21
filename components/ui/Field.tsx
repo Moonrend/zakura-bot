@@ -26,7 +26,7 @@ export const Field = forwardRef<TextInput, TextInputProps & {
           : "border-transparent",
       )}>
         {icon}
-        <TextInput ref={ref} editable={editable} placeholderTextColor="#a3a3a3"
+        <TextInput ref={ref} editable={editable} accessibilityLabel={label} placeholderTextColor="#a3a3a3"
           onFocus={(event) => { setFocused(true); onFocus?.(event); }}
           onBlur={(event) => { setFocused(false); onBlur?.(event); }}
           className={cn("min-w-0 min-h-11 flex-1 py-3 text-[15px] text-ink outline-none", className)}

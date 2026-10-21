@@ -151,7 +151,7 @@ for (const width of [1440, 320]) test(`settings preserves the transcript reading
     }
     if (width < 768) await menu.press("Enter");
     await settings.press("Enter");
-    await expect(page.getByRole("heading", { name: "Your connection", exact: true })).toBeFocused();
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
     await expect.poll(() => transcript.evaluate((element) => element.clientHeight)).toBe(0);
     const messageId = `offscreen-${following}`;
     channel!.send(JSON.stringify({ type: "chat_reply", agentId: "live", messageId, createdAt: following ? 81 : 80,
@@ -330,13 +330,13 @@ for (const width of [1440, 320]) test(`settings navigation restores keyboard foc
   await input.fill("Keep this draft across settings");
   const menu = page.getByRole("button", { name: "Open agent list", exact: true });
   const openSettings = page.getByRole("button", { name: "Open settings", exact: true });
-  const heading = page.getByRole("heading", { name: "Your connection", exact: true });
+  const heading = page.getByRole("heading", { name: "Settings", exact: true });
   for (const back of [false, true]) {
     if (width < 768) await menu.press("Enter");
     await openSettings.press("Enter");
     await expect(heading).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(page.getByRole("switch", { name: "Use mock channel", exact: true })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Close settings", exact: true })).toBeFocused();
     if (back) await page.goBack();
     else await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
     await expect(width < 768 ? menu : openSettings).toBeFocused();
@@ -359,7 +359,7 @@ test("settings returns to the conversation when channel recovery removes its ope
   })), { key: settingsKey });
   await page.goto("/");
   await page.getByRole("button", { name: "Open connection settings", exact: true }).press("Enter");
-  await expect(page.getByRole("heading", { name: "Your connection", exact: true })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
   channel!.send(JSON.stringify({ type: "agents", agents: [{ id: "live", name: "Live", status: "idle" }] }));
   await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
   await expect(page.getByTestId("chat-transcript")).toBeFocused();
@@ -369,31 +369,24 @@ test("settings returns to the conversation when channel recovery removes its ope
 test("direct settings visits enter at the heading and close into keyboard-accessible chat", async ({ page }) => {
   await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ useMockChannel: true, onboardingComplete: true })), { key: settingsKey });
   await page.goto("/settings");
-  await expect(page.getByRole("heading", { name: "Your connection", exact: true })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
   await page.getByRole("button", { name: "Close settings", exact: true }).press("Enter");
   await expect(page.getByTestId("chat-transcript")).toBeFocused();
   await expect(page.getByRole("textbox", { name: "Message Zakura", exact: true })).toHaveValue("");
 });
 
-test("saving settings keeps keyboard navigation through success and storage failure", async ({ page }) => {
+test("immediate appearance settings remain usable after storage failure", async ({ page }) => {
+  await mockReady(page);
   await page.goto("/settings");
-  const save = page.getByRole("button", { name: "Save settings", exact: true });
-  const actions = page.getByRole("group", { name: "Settings actions", exact: true });
-  await save.press("Enter");
-  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
-  await expect(actions).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(save).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Close settings", exact: true })).toBeFocused();
-
-  await page.getByRole("textbox", { name: "Zakura Base URL", exact: true }).fill("https://example.com/");
+  const light = page.getByRole("radio", { name: "Theme: Light", exact: true });
+  await light.press("Enter");
+  await expect(light).toHaveAttribute("aria-checked", "true");
   await page.evaluate(() => { Storage.prototype.setItem = () => { throw new Error("Storage unavailable"); }; });
-  await save.press("Enter");
+  const dark = page.getByRole("radio", { name: "Theme: Dark", exact: true });
+  await dark.press("Enter");
   await expect(page.getByRole("alert")).toContainText("Storage unavailable");
-  await expect(actions).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(save).toBeFocused();
+  await expect(light).toHaveAttribute("aria-checked", "true");
+  await expect(dark).toBeEnabled();
   await accessible(page);
 });
 
@@ -2005,7 +1998,7 @@ test("mobile drawer, Escape, offline drafts, touch layout and accessibility", as
   await accessible(page);
 });
 
-test("equivalent live settings retain drafts, streams and pending delivery and Stop requests", async ({ page }) => {
+test("appearance changes retain drafts, streams and pending delivery and Stop requests", async ({ page }) => {
   const channels: WebSocketRoute[] = [];
   const sends: { clientMessageId: string; text: string }[] = [];
   let interrupts = 0;
@@ -2031,9 +2024,8 @@ test("equivalent live settings retain drafts, streams and pending delivery and S
   await page.getByRole("button", { name: "Stop generating", exact: true }).click();
   await expect.poll(() => interrupts).toBe(1);
   await page.getByRole("button", { name: "Open settings", exact: true }).click();
-  await page.getByLabel("Zakura Base URL", { exact: true }).fill("ws://127.0.0.1:4173/api/zakurabot/ws/");
-  await page.getByRole("button", { name: "Save settings", exact: true }).click();
-  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.getByRole("radio", { name: "Theme: Dark", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Theme: Dark", exact: true })).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await expect(input).toHaveValue("Keep my next draft");
   expect(channels).toHaveLength(1);
@@ -2050,20 +2042,15 @@ test("equivalent live settings retain drafts, streams and pending delivery and S
   await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
   expect(sends).toHaveLength(1);
 
-  // A different credential must still isolate messages and drafts,
-  // even when its roster reuses exactly the same agent ids.
   await page.getByRole("button", { name: "Open settings", exact: true }).click();
-  await page.getByLabel("Auth token", { exact: true }).fill("another-device-token");
-  await page.getByRole("button", { name: "Save settings", exact: true }).click();
-  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Close settings", exact: true }).click();
-  await expect(input).toHaveValue("");
-  await expect.poll(() => channels.length).toBe(2);
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm sign out", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Connect to Zakura" })).toBeVisible();
   await expect(page.getByTestId("message-reply")).toHaveCount(0);
   await expect(user).toHaveCount(0);
 });
 
-test("saving unused live credentials keeps the current mock reply and next draft", async ({ page }) => {
+test("appearance changes keep the current mock reply and next draft", async ({ page }) => {
   await mockReady(page);
   const input = page.getByRole("textbox", { name: "Message Zakura", exact: true });
   await input.fill("slow");
@@ -2072,50 +2059,36 @@ test("saving unused live credentials keeps the current mock reply and next draft
   await expect(reply).toBeVisible();
   await input.fill("Keep the mock draft");
   await page.getByRole("button", { name: "Open settings", exact: true }).click();
-  await page.getByLabel("Zakura Base URL", { exact: true }).fill("https://next-server.example.com");
-  await page.getByLabel("Auth token", { exact: true }).fill("future-device-token");
-  await page.getByRole("button", { name: "Save settings", exact: true }).click();
-  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.getByRole("radio", { name: "Theme: Dark", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Theme: Dark", exact: true })).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await expect(input).toHaveValue("Keep the mock draft");
   await expect(reply).not.toContainText("Stopped");
   await expect(reply).toContainText("Interrupted replies keep the text received so far and are marked as stopped.", { timeout: 10_000 });
 });
 
-test("direct settings load, validation and persistence survive reload", async ({ page }) => {
+test("direct appearance settings persist without exposing credentials", async ({ page }) => {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript(({ key }) => {
-    if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "https://saved.example.com", authToken: "saved-token", useMockChannel: true }));
-  }, { key: settingsKey });
+  await mockReady(page);
   await page.goto("/settings");
-  const url = page.getByLabel("Zakura Base URL", { exact: true });
-  await expect(url).toHaveValue("https://saved.example.com");
-  await page.getByRole("switch", { name: "Use mock channel", exact: true }).click();
-  await url.fill("https://example.com?token=bad");
-  await page.getByRole("button", { name: "Save settings", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("must not include");
-  await url.fill("https://new.example.com/prefix");
-  await page.getByLabel("Auth token", { exact: true }).fill("new-token");
-  await page.getByRole("switch", { name: "Use mock channel", exact: true }).click();
-  await page.getByRole("button", { name: "Save settings", exact: true }).click();
-  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.getByRole("radio", { name: "Theme: Light", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Theme: Light", exact: true })).toHaveAttribute("aria-checked", "true");
   await page.reload();
-  await expect(url).toHaveValue("https://new.example.com/prefix");
-  await expect(page.getByLabel("Auth token", { exact: true })).toHaveValue("new-token");
+  await expect(page.getByRole("radio", { name: "Theme: Light", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByLabel("Auth token", { exact: true })).toHaveCount(0);
   await accessible(page);
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Message Zakura", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test("storage failures do not show a false Saved result", async ({ page }) => {
+test("storage failures do not falsely select an unsaved theme", async ({ page }) => {
+  await mockReady(page);
   await page.goto("/settings");
-  await expect(page.getByLabel("Zakura Base URL", { exact: true })).toBeEditable();
-  await page.getByLabel("Zakura Base URL", { exact: true }).fill("https://unsaved.example.com");
   await page.evaluate(() => { Storage.prototype.setItem = () => { throw new Error("Storage quota exceeded"); }; });
-  await page.getByRole("button", { name: "Save settings", exact: true }).click();
+  await page.getByRole("radio", { name: "Theme: Light", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Storage quota exceeded");
-  await expect(page.getByText("Saved", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "Theme: Light", exact: true })).not.toHaveAttribute("aria-checked", "true");
 });
 
 test("live roster, rejected send retry, chat_reply cards and raw model event isolation", async ({ page }) => {
@@ -2663,7 +2636,7 @@ test("unsupported file drops are blocked on direct settings loads and empty rost
   await page.addInitScript(({ key }) => localStorage.setItem(key, JSON.stringify({ zakuraBaseUrl: "http://127.0.0.1:4173", authToken: "test-channel-token", useMockChannel: false })), { key: settingsKey });
   for (const path of ["/settings", "/"]) {
     await page.goto(path);
-    if (path === "/settings") await page.getByLabel("Zakura Base URL", { exact: true }).fill("https://unsaved.example.com");
+    if (path === "/settings") await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
     else await expect(page.getByText("No bots yet", { exact: true })).toBeVisible();
     const prevented = await page.locator("body").evaluate((element) => {
       const dataTransfer = new DataTransfer();
@@ -2676,7 +2649,7 @@ test("unsupported file drops are blocked on direct settings loads and empty rost
     });
     expect(prevented).toEqual([true, true]);
     expect(new URL(page.url()).pathname).toBe(path);
-    if (path === "/settings") await expect(page.getByLabel("Zakura Base URL", { exact: true })).toHaveValue("https://unsaved.example.com");
+    if (path === "/settings") await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
   }
 });
 
@@ -2752,7 +2725,8 @@ test("empty channel recovery remains keyboard accessible in a short narrow windo
   await expect(alert).toHaveCount(0);
   await expect(setup).toBeFocused();
   await settings.click();
-  await expect(page.getByLabel("Auth token", { exact: true })).toHaveValue("test-channel-token");
+  await expect(page.getByRole("button", { name: "Add instance", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Auth token", { exact: true })).toHaveCount(0);
 });
 
 test("an idle roster releases a Stop requested from a reconnect snapshot and keeps the draft", async ({ page }) => {

@@ -81,9 +81,7 @@ export function SignIn() {
   }
   return <ScrollView className="flex-1 bg-app" keyboardShouldPersistTaps="handled"
     contentContainerStyle={{ padding: 24, paddingTop: Math.max(insets.top, 48), paddingBottom: Math.max(insets.bottom, 24), maxWidth: 560, width: "100%", alignSelf: "center" }}>
-    <View className="mb-8 items-center"><View className="h-16 w-16 rounded-full bg-ink" /></View>
     <Text className="mb-2 text-center text-[24px] font-medium text-ink" accessibilityRole="header">Connect to Zakura</Text>
-    <Text className="mb-6 text-center text-[13px] leading-5 text-ink-secondary">Zakura is all you need.</Text>
     <View className="mb-5 overflow-hidden rounded-3xl bg-panel">
       <View className="mx-4 min-h-14 flex-row items-center gap-4 py-2">
         <Text className="text-[16px] text-ink">Instance</Text>
@@ -114,9 +112,6 @@ export function SignIn() {
     <Pressable accessibilityRole="button" accessibilityLabel="Try demo" className="mt-6 min-h-11 items-center justify-center"
       onPress={() => { void updateSettings({ useMockChannel: true, onboardingComplete: true }).then(() => router.dismissTo("/")).catch((cause: Error) => setError(cause.message)); }}>
       <Text className="text-[14px] text-ink-secondary">Try demo</Text>
-    </Pressable>
-    <Pressable accessibilityRole="button" accessibilityLabel="Advanced connection settings" className="min-h-11 items-center justify-center" onPress={() => router.push("/settings")}>
-      <Text className="text-[13px] text-ink-secondary">Advanced</Text>
     </Pressable>
   </ScrollView>;
 }

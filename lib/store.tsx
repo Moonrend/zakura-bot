@@ -11,7 +11,7 @@ import { loadSettings, saveSettings, loadProfiles, saveProfile, readCredentials,
 import { CredentialSession, instanceUrl, refreshOAuthToken, revokeOAuthToken, zakuraRequest, zakuraBinaryRequest,
   tokensFromOAuth, type InstanceProfile, type OAuthTokens, type ZakuraBinary } from "./auth";
 import { agentPath, agentsPath, listSpaces, mePath, parseAccountInfo, parseAgentDetail, resolveSpaceId, type AgentDraft, type ManagedAgent, type SpaceInfo } from "./agents";
-import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type BotSession, type InteractionAnswer, type MessageAttachment } from "./types";
+import { DEFAULT_SETTINGS, type Agent, type AppSettings, type ChatMessage, type InteractionAnswer, type MessageAttachment } from "./types";
 import { emptyGroups, reduceGroups, type BotGroups, type GroupAction } from "./groups";
 import { loadGroups, saveGroups } from "./group-storage";
 import { loadHiddenBots, saveHiddenBots } from "./hidden-bots";
@@ -52,8 +52,6 @@ type StoreValue = {
   addAttachments: (agentId: string, files: PickedFile[]) => void;
   clearAttachments: (agentId: string, ids: string[]) => void;
   retryAttachment: (agentId: string, id: string) => void;
-  sessions: Record<string, BotSession>;
-  sessionAction: (agentId: string, action: "status" | "start" | "stop" | "new") => Promise<BotSession>;
   /** True on a trusted instance: every agent is available and manageable. */
   canManage: boolean;
   createAgent: (draft: AgentDraft) => Promise<ManagedAgent>;
@@ -134,7 +132,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [profiles, setProfiles] = useState<InstanceProfile[]>([]);
   const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<Record<string, BotSession>>({});
   const [canManage, setCanManage] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const currentUserIdRef = useRef<string | null>(null);
@@ -194,7 +191,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const agents = nextSettings.useMockChannel ? DEMO_AGENTS.map((agent) => ({ ...agent,
         preview: previewFromMessages(messages[agent.id] ?? []) ?? agent.preview })) : [];
       dispatch({ type: "reset", agents, messages });
-      setSessions({});
       setCanManage(false);
       setCurrentUserId(null);
       currentUserIdRef.current = null;
@@ -738,28 +734,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setAuthNotice(notice);
   }, [updateSettings]);
 
-  const sessionAction = useCallback(async (agentId: string, action: "status" | "start" | "stop" | "new") => {
-    const scope = channelScope(settingsRef.current);
-    if (!stateRef.current.agents.some((agent) => agent.id === agentId)) throw new Error("This bot is no longer authorized.");
-    let session: BotSession;
-    if (settingsRef.current.useMockChannel) {
-      if (action === "stop" || action === "new") await clientRef.current?.interrupt?.(agentId);
-      session = { agentId, bindingId: `demo-${agentId}`, sessionId: `demo-session-${agentId}`, status: "ready" };
-    } else {
-      const path = `/api/zakurabot/sessions/${encodeURIComponent(agentId)}`;
-      const result = await request<{ session: BotSession }>(path, action === "status" ? {} : {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }),
-      });
-      session = result.session;
-    }
-    if (scope !== channelScope(settingsRef.current)) throw new Error("The active instance changed.");
-    setSessions((previous) => ({ ...previous, [agentId]: session }));
-    if (action === "stop" || action === "new") dispatch({ type: "typing", agentId, active: false });
-    if (action === "new") dispatch({ type: "message", message: { id: uid("session"), agentId, kind: "system", role: "system",
-      text: "New session started. Your bot now has a fresh context.", createdAt: Date.now() } });
-    return session;
-  }, [request, dispatch]);
-
   // Management goes through Zakura's standard agent API with the account's own
   // permissions; the server pushes a fresh roster frame after each change.
   const createAgent = useCallback(async (draft: AgentDraft) => {
@@ -789,7 +763,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     typing: Object.fromEntries(state.agents.map((agent) => [agent.id, isAgentWorking(state, agent.id)])),
     interrupting: state.interrupting, connection: state.connection,
     connectionDetail: state.connectionDetail, settings, settingsReady, transportLabel, lastError,
-    profiles, authNotice, reportAuthError, spaces, switchSpace, completeSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    profiles, authNotice, reportAuthError, spaces, switchSpace, completeSignIn, switchInstance, signOut, request, groups, groupsReady, updateGroups,
     hiddenBots, setAgentHidden, setAgentUnread, currentUserId,
     canManage, createAgent, updateAgent, deleteAgent, duplicateAgent,
     requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment,
@@ -798,7 +772,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     dismissError, updateSettings, setSidebarOpen, setThreadVisible,
   }), [state, settings, settingsReady, transportLabel, lastError, sidebarOpen, selectAgent, setDraft,
     clearDraft, send, retryMessage, removeMessage, toggleReaction, cancelQueued, respondInteraction, refreshInteraction, interrupt, reconnect, dismissError, updateSettings, setThreadVisible,
-    profiles, authNotice, reportAuthError, spaces, switchSpace, completeSignIn, switchInstance, signOut, request, sessions, sessionAction, groups, groupsReady, updateGroups,
+    profiles, authNotice, reportAuthError, spaces, switchSpace, completeSignIn, switchInstance, signOut, request, groups, groupsReady, updateGroups,
     hiddenBots, setAgentHidden, setAgentUnread, currentUserId,
     canManage, createAgent, updateAgent, deleteAgent, duplicateAgent,
     requestBinary, attachmentsByAgent, addAttachments, clearAttachments, retryAttachment, loadHistory]);

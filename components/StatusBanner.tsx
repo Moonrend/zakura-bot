@@ -123,10 +123,7 @@ function Banner({
       accessibilityRole={tone === "muted" ? undefined : "alert"}
       className={cn(
         "mx-4 flex-row items-center gap-2 rounded-xl border px-3",
-        shortWindow ? "mb-1 py-1" : "mb-2 py-1",
-        tone === "muted" && "border-hairline bg-panel",
-        tone === "danger" && "border-hairline bg-panel",
-        tone === "warning" && "border-hairline bg-panel",
+        "mb-2 border-hairline bg-panel py-1",
       )}
     >
       {icon}
